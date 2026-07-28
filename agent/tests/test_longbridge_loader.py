@@ -253,6 +253,54 @@ def test_fetch_combines_all_windows_and_caches_complete_frame(
     pd.testing.assert_frame_equal(cached[0], result["AAPL"])
 
 
+def test_fetch_uses_config_factory_when_constructor_rejects_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory_calls: list[tuple[str, str, str]] = []
+
+    class NewSdkConfig:
+        def __init__(self) -> None:
+            raise TypeError("Config() takes no positional arguments")
+
+        @classmethod
+        def from_apikey(cls, app_key: str, app_secret: str, access_token: str) -> object:
+            factory_calls.append((app_key, app_secret, access_token))
+            return "factory-config"
+
+    class FakeQuoteContext:
+        def __init__(self, config: object) -> None:
+            assert config == "factory-config"
+
+        def history_candlesticks_by_date(
+            self, *args: object, **kwargs: object
+        ) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    timestamp=pd.Timestamp(kwargs["start"]),
+                    open=10,
+                    high=11,
+                    low=9,
+                    close=10.5,
+                    volume=100,
+                )
+            ]
+
+    fake_openapi = SimpleNamespace(
+        Config=NewSdkConfig,
+        QuoteContext=FakeQuoteContext,
+        Period=SimpleNamespace(Day="day"),
+        AdjustType=SimpleNamespace(NoAdjust="none"),
+    )
+    monkeypatch.setattr(loader_mod, "_require_longbridge", lambda: fake_openapi)
+    monkeypatch.setattr(loader_mod, "loader_cache_get", lambda **kwargs: None)
+    monkeypatch.setattr(loader_mod, "loader_cache_put", lambda **kwargs: None)
+
+    result = _configured_loader().fetch(["0700.HK"], "2026-01-01", "2026-01-02")
+
+    assert factory_calls == [("key", "secret", "token")]
+    assert list(result) == ["0700.HK"]
+
+
 def test_fetch_rejects_partial_history_when_a_window_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
