@@ -334,9 +334,17 @@ class LongbridgeLoader:
         openapi = _require_longbridge()
         _init_error: str | None = None
         try:
-            cfg = openapi.Config(
-                self._app_key, self._app_secret, self._access_token,
-            )
+            config_cls = openapi.Config
+            try:
+                cfg = config_cls(
+                    self._app_key, self._app_secret, self._access_token,
+                )
+            except TypeError:
+                # Longbridge SDK 4.x exposes a zero-argument Config constructor
+                # and requires credentials through this factory instead.
+                cfg = config_cls.from_apikey(
+                    self._app_key, self._app_secret, self._access_token,
+                )
             ctx = openapi.QuoteContext(cfg)
         except LongbridgeDependencyError:
             raise
