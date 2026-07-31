@@ -379,17 +379,22 @@ class TraceWriter:
 
         Args:
             run_id: Run or session ID.
-            runs_dir: Base runs directory. Defaults to ``agent/runs``.
-            sessions_dir: Base sessions directory. Defaults to
-                ``agent/sessions``.
+            runs_dir: Base runs directory. Defaults to the user-level
+                runs dir under the runtime root.
+            sessions_dir: Base sessions directory. Defaults to the
+                user-level sessions dir under the runtime root.
 
         Returns:
             Directory containing ``trace.jsonl``, or ``None`` when absent.
         """
         if sessions_dir is None:
-            sessions_dir = Path(__file__).resolve().parents[2] / "sessions"
+            from src.config.paths import get_sessions_dir
+
+            sessions_dir = get_sessions_dir()
         if runs_dir is None:
-            runs_dir = Path(__file__).resolve().parents[2] / "runs"
+            from src.config.paths import get_runs_dir
+
+            runs_dir = get_runs_dir()
 
         session_dir = sessions_dir / run_id
         if (session_dir / "trace.jsonl").exists():
