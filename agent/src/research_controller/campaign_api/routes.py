@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 AuthDep = Callable[..., Awaitable[Any] | Any]
 
 _controller: ResearchCampaignController | None = None
+_controller_factory: Callable[[], ResearchCampaignController] | None = None
 
 
 def set_controller(controller: ResearchCampaignController) -> None:
@@ -39,7 +40,20 @@ def set_controller(controller: ResearchCampaignController) -> None:
     _controller = controller
 
 
+def set_controller_factory(factory: Callable[[], ResearchCampaignController]) -> None:
+    """Lazily provide the controller singleton.
+
+    Lets ``api_server`` register routes without constructing the controller
+    (and its SQLite store) at import time.
+    """
+    global _controller_factory
+    _controller_factory = factory
+
+
 def get_controller() -> ResearchCampaignController:
+    global _controller
+    if _controller is None and _controller_factory is not None:
+        _controller = _controller_factory()
     if _controller is None:
         raise RuntimeError("research campaign controller not configured")
     return _controller
