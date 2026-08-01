@@ -35,18 +35,29 @@ _controller_factory: Callable[[], ResearchCampaignController] | None = None
 
 
 def set_controller(controller: ResearchCampaignController) -> None:
-    """Set the controller singleton used by the routes (test seam)."""
-    global _controller
+    """Set the controller singleton used by the routes (test seam).
+
+    Also clears any lazily-registered factory: an explicit instance must take
+    precedence over a stale factory (e.g. one registered by ``api_server`` at
+    import time), otherwise ``get_controller()`` could rebuild a different
+    controller with another store / database.
+    """
+    global _controller, _controller_factory
     _controller = controller
+    _controller_factory = None
 
 
 def set_controller_factory(factory: Callable[[], ResearchCampaignController]) -> None:
     """Lazily provide the controller singleton.
 
     Lets ``api_server`` register routes without constructing the controller
-    (and its SQLite store) at import time.
+    (and its SQLite store) at import time. Replacing the factory also clears
+    any already-cached controller instance, so the next ``get_controller()``
+    builds from the new factory instead of reusing a stale singleton (which
+    would leak state across configs / databases / app instances).
     """
-    global _controller_factory
+    global _controller, _controller_factory
+    _controller = None
     _controller_factory = factory
 
 

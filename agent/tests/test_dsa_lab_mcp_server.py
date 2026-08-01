@@ -85,6 +85,14 @@ def test_validated_base_url_rejects_non_loopback() -> None:
             dsa._validated_base_url(bad)
 
 
+def test_validated_base_url_reports_caller_var_name() -> None:
+    # 错误消息必须带调用方传入的变量名，而不是硬编码 DSA_LAB_URL。
+    with pytest.raises(ValueError, match="DSA_RESEARCH_LOOP_URL must be a loopback HTTP URL"):
+        dsa._validated_base_url("https://example.com", var_name="DSA_RESEARCH_LOOP_URL")
+    with pytest.raises(ValueError, match="CUSTOM_URL contains unsupported URL components"):
+        dsa._validated_base_url("http://user:pass@127.0.0.1:8011", var_name="CUSTOM_URL")
+
+
 def test_resource_id_accepts_allowed_chars() -> None:
     assert dsa._resource_id("ma_cross-2026", name="batch_id") == "ma_cross-2026"
     assert dsa._resource_id("ABC_123", name="batch_id") == "ABC_123"
@@ -216,6 +224,11 @@ def test_coerce_timeout_rejects_invalid() -> None:
             dsa._coerce_timeout(bad)
 
 
+def test_coerce_timeout_reports_caller_var_name() -> None:
+    with pytest.raises(ValueError, match="CUSTOM_TIMEOUT_VAR must be a positive number"):
+        dsa._coerce_timeout("abc", var_name="CUSTOM_TIMEOUT_VAR")
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — _lab_request with an injected client
 # ---------------------------------------------------------------------------
@@ -304,6 +317,16 @@ def test_lab_request_rejects_non_loopback_env_url(monkeypatch: pytest.MonkeyPatc
     payload = json.loads(result)
     assert payload["status"] == "error"
     assert "must be a loopback HTTP URL" in payload["error"]
+
+
+def test_research_loop_request_reports_research_loop_var_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 非 loopback 的 DSA_RESEARCH_LOOP_URL 报错必须提示 DSA_RESEARCH_LOOP_URL，而不是 DSA_LAB_URL。
+    monkeypatch.setenv("DSA_RESEARCH_LOOP_URL", "https://example.com")
+    fake = _FakeClient(base_url="http://127.0.0.1:8011", timeout=300.0, response=_ok_response(body={}))
+    result = dsa._research_loop_request("get_research_loop_capabilities", client_factory=lambda **kw: fake)
+    payload = json.loads(result)
+    assert payload["status"] == "error"
+    assert "DSA_RESEARCH_LOOP_URL must be a loopback HTTP URL" in payload["error"]
 
 
 def test_lab_request_respects_explicit_base_url_over_env(monkeypatch: pytest.MonkeyPatch) -> None:

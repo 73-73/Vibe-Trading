@@ -17,7 +17,9 @@ from src.research_controller.campaign_api.routes import (
     get_controller,
     register_research_campaign_routes,
     set_controller,
+    set_controller_factory,
 )
+from src.research_controller.client.dsa_client import DsaLoopClient
 from src.research_controller.state_machine.controller import ResearchCampaignController
 from src.research_controller.store.campaign_store import CampaignStore
 
@@ -163,10 +165,87 @@ def test_report_generated_through_api(tmp_path: Path, mock: MockDsaServer) -> No
 def test_controller_not_configured_raises() -> None:
     import src.research_controller.campaign_api.routes as routes_module
 
-    original = routes_module._controller
+    original_controller = routes_module._controller
+    original_factory = routes_module._controller_factory
     routes_module._controller = None
+    routes_module._controller_factory = None
     try:
         with pytest.raises(RuntimeError):
             get_controller()
     finally:
-        routes_module._controller = original
+        routes_module._controller = original_controller
+        routes_module._controller_factory = original_factory
+
+
+def test_factory_swap_uses_new_controller_for_requests(tmp_path: Path) -> None:
+    """Replacing the factory must serve subsequent requests from the new controller.
+
+    Regression: the module-level ``_controller`` singleton was built once from
+    the factory and cached; swapping the factory kept serving the stale
+    instance, leaking state across configs / databases / app instances.
+    """
+    import src.research_controller.campaign_api.routes as routes_module
+
+    saved_controller = routes_module._controller
+    saved_factory = routes_module._controller_factory
+    try:
+        controller_a = ResearchCampaignController(
+            store=CampaignStore(db_path=tmp_path / "a.db"),
+            dsa_client=DsaLoopClient(base_url="http://127.0.0.1:9", timeout=0.1),
+        )
+        controller_b = ResearchCampaignController(
+            store=CampaignStore(db_path=tmp_path / "b.db"),
+            dsa_client=DsaLoopClient(base_url="http://127.0.0.1:10", timeout=0.1),
+        )
+
+        app = FastAPI()
+        register_research_campaign_routes(app, require_auth=lambda: None)
+        routes_module.set_controller_factory(lambda: controller_a)
+
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        created = client.post("/research-campaigns", json=sample_campaign_request())
+        assert created.status_code == 201
+        campaign_id = created.json()["campaign_id"]
+
+        # Swap the factory; the next request must go to controller_b (empty
+        # store), not the stale cached controller_a.
+        routes_module.set_controller_factory(lambda: controller_b)
+        assert client.get(f"/research-campaigns/{campaign_id}").status_code == 404
+        assert client.get("/research-campaigns").json() == []
+    finally:
+        routes_module._controller = saved_controller
+        routes_module._controller_factory = saved_factory
+
+
+def test_set_controller_overrides_leftover_factory(tmp_path: Path) -> None:
+    """set_controller(c) must win over a factory registered earlier.
+
+    Regression: api_server registers a factory at import time; a test seam that
+    calls set_controller(c) must clear that factory, otherwise get_controller()
+    could lazily rebuild a different controller.
+    """
+    import src.research_controller.campaign_api.routes as routes_module
+
+    saved_controller = routes_module._controller
+    saved_factory = routes_module._controller_factory
+    try:
+        explicit = ResearchCampaignController(
+            store=CampaignStore(db_path=tmp_path / "explicit.db"),
+            dsa_client=DsaLoopClient(base_url="http://127.0.0.1:9", timeout=0.1),
+        )
+        other = ResearchCampaignController(
+            store=CampaignStore(db_path=tmp_path / "other.db"),
+            dsa_client=DsaLoopClient(base_url="http://127.0.0.1:11", timeout=0.1),
+        )
+
+        routes_module.set_controller_factory(lambda: other)
+        routes_module.set_controller(explicit)
+        # Explicit instance wins; leftover factory must not rebuild another one.
+        assert routes_module.get_controller() is explicit
+
+        # A later set_controller_factory is still authoritative (rebuilds).
+        routes_module.set_controller_factory(lambda: other)
+        assert routes_module.get_controller() is other
+    finally:
+        routes_module._controller = saved_controller
+        routes_module._controller_factory = saved_factory

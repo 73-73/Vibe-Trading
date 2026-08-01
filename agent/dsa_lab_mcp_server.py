@@ -7,7 +7,7 @@ proxies to the loopback-only DSA Backtest Lab at ``http://127.0.0.1:8011``.
 The bridge also exposes the research-loop.v1 tools (``get_research_loop_*``,
 ``register_research_*``, ``start_research_execution``, ``poll_research_events``
 and the data tools) per spec §7.1. Those proxy to the loopback-only DSA
-research-loop API at ``http://127.0.0.1:8012`` by default (``DSA_RESEARCH_LOOP_URL``).
+research-loop API at ``http://127.0.0.1:8011`` by default (``DSA_RESEARCH_LOOP_URL``).
 
 Intentionally imports NO ``src.*`` modules — DSA-specific logic lives only
 in this file so the core tool registry / env schema stay generic.
@@ -36,7 +36,7 @@ _MAX_RESPONSE_BYTES = 10_000_000
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DEFAULT_DSA_LAB_URL = "http://127.0.0.1:8011"
 _DEFAULT_DSA_LAB_TIMEOUT = 300.0
-_DEFAULT_DSA_RESEARCH_LOOP_URL = "http://127.0.0.1:8012"
+_DEFAULT_DSA_RESEARCH_LOOP_URL = "http://127.0.0.1:8011"
 _SOURCE_CODE_MAX_BYTES = 65_536
 _RESEARCH_LOOP_PREFIX = "/internal/v1/research-loop"
 _RETRYABLE_HTTP_STATUS = frozenset({429, 502, 503, 504})
@@ -44,13 +44,13 @@ _RETRYABLE_HTTP_STATUS = frozenset({429, 502, 503, 504})
 mcp = FastMCP("dsa-lab")
 
 
-def _validated_base_url(raw: str) -> str:
+def _validated_base_url(raw: str, *, var_name: str = "DSA_LAB_URL") -> str:
     """Validate that ``raw`` is a loopback-only HTTP URL and normalize it."""
     parsed = urlparse(raw.strip())
     if parsed.scheme != "http" or parsed.hostname not in _LOOPBACK_HOSTS:
-        raise ValueError("DSA_LAB_URL must be a loopback HTTP URL")
+        raise ValueError(f"{var_name} must be a loopback HTTP URL")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("DSA_LAB_URL contains unsupported URL components")
+        raise ValueError(f"{var_name} contains unsupported URL components")
     return raw.strip().rstrip("/")
 
 
@@ -62,14 +62,14 @@ def _resource_id(value: Any, *, name: str) -> str:
     return normalized
 
 
-def _coerce_timeout(raw: Any) -> float:
+def _coerce_timeout(raw: Any, *, var_name: str = "DSA_LAB_TIMEOUT_SECONDS") -> float:
     """Coerce a timeout env value to a positive float."""
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        raise ValueError("DSA_LAB_TIMEOUT_SECONDS must be a positive number")
+        raise ValueError(f"{var_name} must be a positive number")
     if value <= 0:
-        raise ValueError("DSA_LAB_TIMEOUT_SECONDS must be a positive number")
+        raise ValueError(f"{var_name} must be a positive number")
     return value
 
 
@@ -172,10 +172,12 @@ def _lab_request(
     """
     try:
         effective_base_url = _validated_base_url(
-            base_url if base_url is not None else os.getenv("DSA_LAB_URL", _DEFAULT_DSA_LAB_URL)
+            base_url if base_url is not None else os.getenv("DSA_LAB_URL", _DEFAULT_DSA_LAB_URL),
+            var_name="DSA_LAB_URL",
         )
         effective_timeout = _coerce_timeout(
-            timeout if timeout is not None else os.getenv("DSA_LAB_TIMEOUT_SECONDS", str(_DEFAULT_DSA_LAB_TIMEOUT))
+            timeout if timeout is not None else os.getenv("DSA_LAB_TIMEOUT_SECONDS", str(_DEFAULT_DSA_LAB_TIMEOUT)),
+            var_name="DSA_LAB_TIMEOUT_SECONDS",
         )
         if page < 1 or not 1 <= page_size <= 200:
             return _error(action, "invalid_pagination")
@@ -411,10 +413,12 @@ def _research_loop_request(
     """Issue one DSA research-loop.v1 request and return a JSON envelope string."""
     try:
         effective_base_url = _validated_base_url(
-            base_url if base_url is not None else os.getenv("DSA_RESEARCH_LOOP_URL", _DEFAULT_DSA_RESEARCH_LOOP_URL)
+            base_url if base_url is not None else os.getenv("DSA_RESEARCH_LOOP_URL", _DEFAULT_DSA_RESEARCH_LOOP_URL),
+            var_name="DSA_RESEARCH_LOOP_URL",
         )
         effective_timeout = _coerce_timeout(
-            timeout if timeout is not None else os.getenv("DSA_LAB_TIMEOUT_SECONDS", str(_DEFAULT_DSA_LAB_TIMEOUT))
+            timeout if timeout is not None else os.getenv("DSA_LAB_TIMEOUT_SECONDS", str(_DEFAULT_DSA_LAB_TIMEOUT)),
+            var_name="DSA_LAB_TIMEOUT_SECONDS",
         )
         method, path, body, headers, params = _research_loop_spec(
             action=action,

@@ -206,6 +206,8 @@ def _render_decisions(data: dict[str, Any]) -> str:
             f"评审: {_fmt(decision.get('source_review_id'))}\n"
             f"- 下一候选: {_fmt(decision.get('next_candidate_id'))} v{_fmt(decision.get('next_candidate_version'))}"
         )
+        if "缺少 DSA 独立评审" in (decision.get("rationale") or ""):
+            lines.append("- ⚠ 该决定在缺少 DSA 独立评审（§9.3 超时旁路）情况下做出")
     return "\n\n".join(lines)
 
 
@@ -292,6 +294,9 @@ def render_campaign_report(data: dict[str, Any]) -> str:
         "> 免责声明：本报告仅用于研究、模拟与回测，不构成实盘投资建议或盈利证明（§20）。",
         "",
     ]
+    if data.get("review_bypassed"):
+        header.append("> ⚠ 本报告包含在缺少 DSA 独立评审（§9.3 超时旁路）情况下做出的决定。")
+        header.append("")
     body: list[str] = []
     for title, key in _SECTIONS:
         body.append(f"## {title}")

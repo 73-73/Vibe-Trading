@@ -7,6 +7,7 @@ compatibility.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,158 @@ def test_error_envelope_422_not_retryable() -> None:
     assert result["error"]["code"] == "source_hash_mismatch"
 
 
+# ---------------------------------------------------------------------------
+# Write methods must always carry a deterministic Idempotency-Key (§4.3)
+# ---------------------------------------------------------------------------
+
+
+def test_register_candidate_sends_deterministic_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).register_candidate("exp_1", {"candidate_id": "cand_1", "candidate_version": 2})
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/experiments/exp_1/candidates"
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == "cand_cand_1_v2"
+
+
+def test_register_candidate_idempotency_key_falls_back_when_id_missing() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).register_candidate("exp_1", {"source_code": "def f(): pass"})
+    key = fake.calls[0]["kwargs"]["headers"]["Idempotency-Key"]
+    assert key.startswith("cand_")
+    assert len(key) >= 5
+
+
+def test_register_candidate_idempotency_key_falls_back_on_invalid_id() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).register_candidate("exp_1", {"candidate_id": "cand.x", "candidate_version": 1})
+    key = fake.calls[0]["kwargs"]["headers"]["Idempotency-Key"]
+    assert key.startswith("cand_")
+    assert len(key) >= 5
+
+
+def test_cancel_execution_sends_deterministic_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).cancel_execution("exec_7")
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/executions/exec_7/cancel"
+    assert call["method"] == "POST"
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == "cancel_exec_7"
+
+
+def test_create_artifact_upload_sends_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).create_artifact_upload({"media_type": "application/json", "size_bytes": 10})
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/artifact-uploads"
+    key = call["kwargs"]["headers"]["Idempotency-Key"]
+    assert key.startswith("upload_")
+    assert len(key) == 7 + 16
+
+
+def test_complete_artifact_upload_sends_deterministic_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).complete_artifact_upload("upload_abc123")
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/artifact-uploads/upload_abc123/complete"
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == "up_upload_abc123"
+
+
+def test_register_factor_snapshot_sends_deterministic_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).register_factor_snapshot({"snapshot_id": "factor_snap_1"})
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/factor-snapshots"
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == "frag_factor_snap_1"
+
+
+def test_register_factor_snapshot_idempotency_key_falls_back_when_id_missing() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).register_factor_snapshot({})
+    key = fake.calls[0]["kwargs"]["headers"]["Idempotency-Key"]
+    assert key.startswith("frag_")
+    assert len(key) == 5 + 16
+
+
+def test_export_market_panel_sends_payload_hash_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    payload = {"format": "csv", "as_of_date": "2026-01-01"}
+    _client(fake).export_market_panel("snap_1", payload)
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/data-snapshots/snap_1/panel-exports"
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == f"panel_snap_1_{digest}"
+
+
+def test_build_universe_snapshot_maps_path_and_idempotency_key() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0,
+                       response=_ok(status=201, data={"universe_snapshot_id": "universe_dev_001", "status": "valid"}))
+    payload = {
+        "snapshot_id": "universe_dev_001",
+        "market": "CN",
+        "start_date": "2010-01-01",
+        "end_date": "2021-12-31",
+        "selection_policy_version": "pit_liquid_active_v1",
+    }
+    result = _client(fake).build_universe_snapshot(payload, idempotency_key="universe_dev_001")
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/universe-snapshots/build"
+    assert call["method"] == "POST"
+    assert call["kwargs"]["headers"]["Idempotency-Key"] == "universe_dev_001"
+    assert call["kwargs"]["json"]["snapshot_id"] == "universe_dev_001"
+    assert result["data"]["status"] == "valid"
+
+
+def test_build_universe_snapshot_generates_key_when_absent() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    _client(fake).build_universe_snapshot({"snapshot_id": "universe_x"})
+    key = fake.calls[0]["kwargs"]["headers"]["Idempotency-Key"]
+    assert key.startswith("uni_")
+    assert len(key) >= 5
+
+
+def test_get_universe_snapshot_maps_path() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0,
+                       response=_ok(data={"universe_snapshot": {"snapshot_id": "universe_dev_001"}}))
+    result = _client(fake).get_universe_snapshot("universe_dev_001")
+    call = fake.calls[0]
+    assert call["path"] == "/internal/v1/research-loop/universe-snapshots/universe_dev_001"
+    assert call["method"] == "GET"
+    assert result["data"]["universe_snapshot"]["snapshot_id"] == "universe_dev_001"
+
+
+def test_get_universe_snapshot_rejects_bad_id() -> None:
+    fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0, response=_ok(data={}))
+    with pytest.raises(ValueError):
+        _client(fake).get_universe_snapshot("has space")
+
+
+def test_universe_wire_against_mock(tmp_path: Path) -> None:
+    from tests.research_loop_test_helpers import MockDsaServer
+
+    server = MockDsaServer("happy_path")
+    server.start()
+    try:
+        client = DsaLoopClient(base_url=server.base_url, timeout=30.0)
+        built = client.build_universe_snapshot(
+            {
+                "snapshot_id": "universe_wire_001",
+                "market": "CN",
+                "start_date": "2010-01-01",
+                "end_date": "2021-12-31",
+            },
+            idempotency_key="universe_wire_001",
+        )
+        assert built["status"] == "ok"
+        assert built["data"]["universe_snapshot_id"] == "universe_wire_001"
+        assert built["data"]["status"] == "valid"
+
+        fetched = client.get_universe_snapshot("universe_wire_001")
+        assert fetched["status"] == "ok"
+        assert fetched["data"]["universe_snapshot"]["snapshot_id"] == "universe_wire_001"
+    finally:
+        server.stop()
+
+
 def test_transport_error_raises_unavailable() -> None:
     fake = _FakeClient(base_url="http://127.0.0.1:8012", timeout=30.0,
                        error=httpx.ConnectError("refused"))
@@ -233,7 +386,7 @@ def test_client_against_mock_happy_path(tmp_path: Path) -> None:
         client = DsaLoopClient(base_url=server.base_url, timeout=30.0)
         caps = client.get_capabilities()
         assert caps["status"] == "ok"
-        assert "portfolio_backtest" in caps["data"]["execution_types"]
+        assert "strategy_sandbox_smoke" in caps["data"]["execution_types"]
 
         payload = {
             "experiment_id": "exp_wire_001",

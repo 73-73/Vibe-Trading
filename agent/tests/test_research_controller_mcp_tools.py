@@ -308,7 +308,7 @@ def test_new_rl_tools_registered_and_capabilities_work(tmp_path: Path, mock: Moc
     result = registry.get("mcp_dsa_lab_get_research_loop_capabilities").execute()
     inner = _inner(result)
     assert inner["status"] == "ok"
-    assert "portfolio_backtest" in inner["data"]["execution_types"]
+    assert "strategy_sandbox_smoke" in inner["data"]["execution_types"]
 
 
 @pytest.mark.integration

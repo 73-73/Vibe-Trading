@@ -174,6 +174,18 @@ def test_report_marks_missing_reviewer() -> None:
     assert "缺少 DSA 独立评审" in markdown
 
 
+def test_report_marks_review_bypassed_decision() -> None:
+    """R09：超时旁路（review_bypassed）时报告头部与决定段都体现缺少独立评审。"""
+    data = _sample_data()
+    data["review_bypassed"] = True
+    data["decisions"][0]["rationale"] = (
+        "执行完成且 gate 通过；等待 DSA 独立评审超时（§9.3），接受结果（缺少 DSA 独立评审）"
+    )
+    markdown = render_campaign_report(data)
+    assert "缺少 DSA 独立评审" in markdown
+    assert "超时旁路" in markdown
+
+
 def test_generate_report_via_controller(tmp_path: Path) -> None:
     server = MockDsaServer("happy_path")
     server.start()

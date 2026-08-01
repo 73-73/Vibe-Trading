@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import uuid
 from collections.abc import Callable
@@ -40,11 +39,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+from src.config.env_schema import EnvConfig
+
 HTTP_PREFIX = "/internal/v1/research-loop"
 RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-_DEFAULT_DSA_LOOP_URL = "http://127.0.0.1:8012"
-_DEFAULT_TIMEOUT = 30.0
 _MAX_RESPONSE_BYTES = 10_000_000
 _SOURCE_CODE_MAX_BYTES = 65_536
 
@@ -107,10 +106,12 @@ class DsaLoopClient:
     """Programmatic client for the DSA research-loop.v1 API.
 
     Args:
-        base_url: Loopback HTTP base URL (e.g. ``http://127.0.0.1:8012``).
-            Defaults to the ``DSA_RESEARCH_LOOP_URL`` env var, falling back to
-            ``http://127.0.0.1:8012``.
-        timeout: Request timeout in seconds.
+        base_url: Loopback HTTP base URL (e.g. ``http://127.0.0.1:8011``).
+            Defaults to ``EnvConfig().dsa.research_loop_url`` (read from the
+            ``DSA_RESEARCH_LOOP_URL`` env var, falling back to
+            ``http://127.0.0.1:8011``).
+        timeout: Request timeout in seconds.  Defaults to
+            ``EnvConfig().dsa.research_loop_timeout_seconds``.
         client_factory: Injectable seam for tests: a callable returning a
             context manager exposing ``request(method, path, **kwargs)``.
     """
@@ -122,10 +123,11 @@ class DsaLoopClient:
         timeout: float | None = None,
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
-        raw = base_url if base_url is not None else os.getenv("DSA_RESEARCH_LOOP_URL", _DEFAULT_DSA_LOOP_URL)
+        dsa_cfg = EnvConfig().dsa
+        raw = base_url if base_url is not None else dsa_cfg.research_loop_url
         self.base_url = validate_loopback_base_url(raw)
         self.timeout = float(
-            timeout if timeout is not None else os.getenv("DSA_RESEARCH_LOOP_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT))
+            timeout if timeout is not None else dsa_cfg.research_loop_timeout_seconds
         )
         self.client_factory = client_factory
 
@@ -206,6 +208,21 @@ class DsaLoopClient:
     def _new_idempotency_key(prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
+    def _idempotency_key(self, raw: str | None, *, prefix: str) -> str:
+        """Return *raw* when it passes the ``[A-Za-z0-9_-]{1,128}`` check, else a uuid key.
+
+        Every write must carry a deterministic, charset-safe ``Idempotency-Key``
+        so the real DSA ``_missing_key`` guard is never tripped (§4.3).  When the
+        payload lacks the identifying field (or the composed key would fail the
+        resource-id check), fall back to a fresh uuid key.
+        """
+        if raw is not None:
+            try:
+                return validate_resource_id(raw, name="idempotency_key")
+            except ValueError:
+                pass
+        return self._new_idempotency_key(prefix)
+
     # ------------------------------------------------------------------
     # Capabilities & experiment lifecycle (§6.1 - §6.4)
     # ------------------------------------------------------------------
@@ -245,10 +262,18 @@ class DsaLoopClient:
                 },
                 "data": None,
             }
+        candidate_id = payload.get("candidate_id")
+        candidate_version = payload.get("candidate_version")
+        raw_key = (
+            f"cand_{candidate_id}_v{candidate_version}"
+            if candidate_id is not None and candidate_version is not None
+            else None
+        )
         return self._post(
             "register_strategy_candidate",
             f"{HTTP_PREFIX}/experiments/{exp_id}/candidates",
             payload,
+            idempotency_key=self._idempotency_key(raw_key, prefix="cand"),
         )
 
     def start_execution(
@@ -272,7 +297,12 @@ class DsaLoopClient:
 
     def cancel_execution(self, execution_id: str) -> dict[str, Any]:
         exec_id = validate_resource_id(execution_id, name="execution_id")
-        return self.request("cancel_research_execution", "POST", f"{HTTP_PREFIX}/executions/{exec_id}/cancel")
+        return self._post(
+            "cancel_research_execution",
+            f"{HTTP_PREFIX}/executions/{exec_id}/cancel",
+            {},
+            idempotency_key=self._idempotency_key(f"cancel_{exec_id}", prefix="cancel"),
+        )
 
     # ------------------------------------------------------------------
     # Events / errors / evidence / reviews / decisions (§6.6 - §6.10)
@@ -340,19 +370,65 @@ class DsaLoopClient:
         snap_id = validate_resource_id(data_snapshot_id, name="data_snapshot_id")
         return self.request("get_data_snapshot", "GET", f"{HTTP_PREFIX}/data-snapshots/{snap_id}")
 
+    def build_universe_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a ``universe_snapshot.v1`` via DSA (§6.12-6.13 / §11.7).
+
+        The payload must include a ``snapshot_id`` with the ``universe_`` prefix,
+        a ``start_date`` / ``end_date`` window and an optional
+        ``selection_policy_version``; DSA reads the stock-pool source from its own
+        configuration (Vibe must not pass host paths, §6.12).
+        """
+        return self._post(
+            "build_universe_snapshot",
+            f"{HTTP_PREFIX}/universe-snapshots/build",
+            payload,
+            idempotency_key=idempotency_key or self._new_idempotency_key("uni"),
+        )
+
+    def get_universe_snapshot(self, universe_snapshot_id: str) -> dict[str, Any]:
+        uni_id = validate_resource_id(universe_snapshot_id, name="universe_snapshot_id")
+        return self.request("get_universe_snapshot", "GET", f"{HTTP_PREFIX}/universe-snapshots/{uni_id}")
+
     def export_market_panel(self, data_snapshot_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         snap_id = validate_resource_id(data_snapshot_id, name="data_snapshot_id")
-        return self._post("export_market_panel", f"{HTTP_PREFIX}/data-snapshots/{snap_id}/panel-exports", payload)
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+        return self._post(
+            "export_market_panel",
+            f"{HTTP_PREFIX}/data-snapshots/{snap_id}/panel-exports",
+            payload,
+            idempotency_key=self._idempotency_key(f"panel_{snap_id}_{digest}", prefix="panel"),
+        )
 
     def create_artifact_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._post("create_artifact_upload", f"{HTTP_PREFIX}/artifact-uploads", payload)
+        return self._post(
+            "create_artifact_upload",
+            f"{HTTP_PREFIX}/artifact-uploads",
+            payload,
+            idempotency_key=f"upload_{uuid.uuid4().hex[:16]}",
+        )
 
     def complete_artifact_upload(self, upload_id: str) -> dict[str, Any]:
         up_id = validate_resource_id(upload_id, name="upload_id")
-        return self._post("complete_artifact_upload", f"{HTTP_PREFIX}/artifact-uploads/{up_id}/complete", {})
+        return self._post(
+            "complete_artifact_upload",
+            f"{HTTP_PREFIX}/artifact-uploads/{up_id}/complete",
+            {},
+            idempotency_key=self._idempotency_key(f"up_{up_id}", prefix="up"),
+        )
 
     def register_factor_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._post("register_factor_snapshot", f"{HTTP_PREFIX}/factor-snapshots", payload)
+        snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex[:16]
+        return self._post(
+            "register_factor_snapshot",
+            f"{HTTP_PREFIX}/factor-snapshots",
+            payload,
+            idempotency_key=self._idempotency_key(f"frag_{snapshot_id}", prefix="frag"),
+        )
 
     def get_factor_snapshot(self, factor_snapshot_id: str) -> dict[str, Any]:
         snap_id = validate_resource_id(factor_snapshot_id, name="factor_snapshot_id")

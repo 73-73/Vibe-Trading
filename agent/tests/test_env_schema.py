@@ -29,6 +29,7 @@ from src.config.env_schema import (
     APIConfig,
     AgentTuningConfig,
     DataConfig,
+    DsaConfig,
     EnvConfig,
     LLMConfig,
     PathConfig,
@@ -43,7 +44,7 @@ from src.config.env_schema import (
 
 # All env-var aliases used by EnvConfig sub-models.
 _ALL_ALIASES: list[str] = []
-for _model in (LLMConfig, DataConfig, APIConfig, SwarmConfig, AgentTuningConfig, PathConfig):
+for _model in (LLMConfig, DataConfig, APIConfig, SwarmConfig, AgentTuningConfig, PathConfig, DsaConfig):
     for _info in _model.model_fields.values():
         if _info.alias:
             _ALL_ALIASES.append(_info.alias)
@@ -149,6 +150,13 @@ class TestEnvConfigDefaults:
         assert c.paths.vibe_trading_swarm_agent_config == ""
         assert c.paths.allow_session_mcp_servers is False
 
+    def test_dsa_defaults(self) -> None:
+        c = EnvConfig()
+        assert c.dsa.lab_url == "http://127.0.0.1:8011"
+        assert c.dsa.lab_timeout_seconds == 300.0
+        assert c.dsa.research_loop_url == "http://127.0.0.1:8011"
+        assert c.dsa.research_loop_timeout_seconds == 30.0
+
 
 # ===================================================================
 # TestEnvConfigTypeCoercion
@@ -194,6 +202,17 @@ class TestEnvConfigTypeCoercion:
         monkeypatch.setenv("SWARM_HEARTBEAT_INTERVAL_S", "5.5")
         c = EnvConfig()
         assert c.swarm.swarm_heartbeat_interval_s == 5.5
+
+    def test_dsa_timeout_coercion(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DSA_LAB_TIMEOUT_SECONDS", "123.5")
+        c = EnvConfig()
+        assert c.dsa.lab_timeout_seconds == 123.5
+        assert isinstance(c.dsa.lab_timeout_seconds, float)
+
+    def test_invalid_dsa_timeout_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DSA_RESEARCH_LOOP_TIMEOUT_SECONDS", "not_a_number")
+        c = EnvConfig()
+        assert c.dsa.research_loop_timeout_seconds == 30.0
 
 
 # ===================================================================
@@ -250,6 +269,13 @@ class TestEnvConfigOverride:
         assert c.swarm.swarm_max_workers == 8
         assert c.data.ccxt_exchange == "okx"
         assert c.api.cors_origins == "http://localhost:3000"
+
+    def test_dsa_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DSA_LAB_URL", "http://127.0.0.1:9999")
+        monkeypatch.setenv("DSA_RESEARCH_LOOP_TIMEOUT_SECONDS", "45.5")
+        c = EnvConfig()
+        assert c.dsa.lab_url == "http://127.0.0.1:9999"
+        assert c.dsa.research_loop_timeout_seconds == 45.5
 
 
 # ===================================================================
@@ -480,6 +506,14 @@ class TestSubModelDirectConstruction:
     def test_swarm_config_direct(self) -> None:
         cfg = SwarmConfig(swarm_max_workers=16)
         assert cfg.swarm_max_workers == 16
+
+    def test_dsa_config_direct(self) -> None:
+        cfg = DsaConfig(
+            research_loop_url="http://127.0.0.1:9999",
+            research_loop_timeout_seconds=12.5,
+        )
+        assert cfg.research_loop_url == "http://127.0.0.1:9999"
+        assert cfg.research_loop_timeout_seconds == 12.5
 
     def test_extra_fields_ignored(self) -> None:
         cfg = LLMConfig(unknown_field="ignored")

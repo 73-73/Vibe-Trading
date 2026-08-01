@@ -60,6 +60,10 @@ STRATEGY_CONTRACT_V1 = "strategy-signal.v1"
 FACTOR_TARGET = 357
 DEFAULT_MOCK_DATA_SNAPSHOT_ID = "data_dev_001"
 
+# R09 决策 B（§9.3）：Reviewer 意见是旁路参考，等待超时后允许决策但必须标记缺少独立评审。
+REVIEW_BYPASS_MARKER = "缺少 DSA 独立评审"
+DEFAULT_REVIEW_TIMEOUT_SECONDS = 300.0
+
 _DECISION_ACTIONS = {
     "accept_result",
     "submit_candidate_revision",
@@ -118,7 +122,8 @@ def default_hypothesis_generator(config: dict[str, Any], existing: list[dict[str
             "factor_ids": factor_ids,
         },
         "data_snapshot_id": None,
-        "universe_snapshot_id": "universe_pit_001",
+        # R08：universe_snapshot_id 只来自 DSA universe build，不硬编码。
+        "universe_snapshot_id": None,
         "tags": ["momentum", "volume"],
         "window": window,
     }
@@ -190,6 +195,7 @@ class ResearchCampaignController:
         snapshot_id_resolver: Callable[..., str | None] | None = None,
         max_repair_versions: int = MAX_REPAIR_VERSIONS_PER_CANDIDATE,
         max_consecutive_fingerprint: int = 2,
+        review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
     ) -> None:
         self.store = store
         self.dsa = dsa_client
@@ -200,6 +206,7 @@ class ResearchCampaignController:
         self.snapshot_id_resolver = snapshot_id_resolver
         self.max_repair_versions = int(max_repair_versions)
         self.max_consecutive_fingerprint = int(max_consecutive_fingerprint)
+        self.review_timeout_seconds = float(review_timeout_seconds)
         self._dsa_unavailable = False
         self._consecutive_failures = 0
 
@@ -424,7 +431,11 @@ class ResearchCampaignController:
         campaign = self.store.get_campaign(campaign_id)
         executions = self.store.list_executions(campaign_id) if campaign else []
         active = any(e["status"] in ("queued", "running") for e in executions)
-        waiting_review = any(e["status"] == "waiting_review" for e in executions)
+        # R09：execution 不再被 review.requested 覆盖为 waiting_review 状态；
+        # 用 current_stage 标记等待评审，轮询仍按评审节奏（§6.6）。
+        waiting_review = any(
+            e["status"] == "waiting_review" or e.get("current_stage") == "waiting_review" for e in executions
+        )
         backoff = 0.0
         if self._dsa_unavailable:
             backoff = min(float(2**self._consecutive_failures), POLL_BACKOFF_MAX_SECONDS)
@@ -622,7 +633,9 @@ class ResearchCampaignController:
         elif event_type == "review.requested":
             exec_id = payload.get("execution_id")
             if exec_id:
-                bundle.setdefault("executions", []).append((exec_id, {"status": "waiting_review"}))
+                # R09 决策 B：Reviewer 是旁路意见，不覆盖 execution 真实终态（保留
+                # completed/failed）；仅用 current_stage 标记等待评审，供 §9.3 超时窗口判断。
+                bundle.setdefault("executions", []).append((exec_id, {"current_stage": "waiting_review"}))
         elif event_type == "review.completed":
             exec_id = payload.get("execution_id")
             review_id = payload.get("review_id")
@@ -630,7 +643,12 @@ class ResearchCampaignController:
             if review:
                 bundle.setdefault("reviews", []).append(review)
             if exec_id and review_id:
-                bundle.setdefault("executions", []).append((exec_id, {"review_id": review_id}))
+                fields: dict[str, Any] = {"review_id": review_id}
+                exec_record = self.store.get_execution(exec_id)
+                if exec_record and exec_record.get("status") in ("completed", "failed"):
+                    # 评审已产出：把 current_stage 恢复为真实终态，避免 poll 一直按评审节奏
+                    fields["current_stage"] = exec_record["status"]
+                bundle.setdefault("executions", []).append((exec_id, fields))
         elif event_type == "review.failed":
             exec_id = payload.get("execution_id")
             if exec_id:
@@ -760,8 +778,11 @@ class ResearchCampaignController:
         if not self._budget_ok(campaign):
             self._enter_waiting_budget(campaign)
             return
-        if campaign["data_snapshot_id"] is None:
+        if campaign["data_snapshot_id"] is None or campaign["current_stage"] == "WAIT_DATA":
             self._ensure_data_snapshot(campaign)
+            return
+        if campaign.get("universe_snapshot_id") is None:
+            self._ensure_universe_snapshot(campaign)
             return
         self._ensure_factor_inventory(campaign)
         self._ensure_experiment_queue(campaign)
@@ -780,6 +801,11 @@ class ResearchCampaignController:
             self._block_campaign(campaign, "DSA capabilities check failed")
 
     def _ensure_data_snapshot(self, campaign: dict[str, Any]) -> None:
+        """R07：数据快照构建是异步的（202 + execution_id）。
+
+        进入 WAIT_DATA 等待构建 execution 终态，且快照质量 valid 后才进
+        FACTOR_INVENTORY；failed → campaign blocked（快照构建失败）。
+        """
         campaign_id = campaign["campaign_id"]
         config = campaign.get("config", {})
         window = config.get("development_window", {})
@@ -815,13 +841,89 @@ class ResearchCampaignController:
                     "created_at": _now(),
                 }
             )
+            fields: dict[str, Any] = {"current_stage": "WAIT_DATA", "updated_at": _now()}
             snap_id = data.get("data_snapshot_id")
             if snap_id:
-                self.store.update_campaign(campaign_id, data_snapshot_id=snap_id, current_stage="FACTOR_INVENTORY", updated_at=_now())
+                # 真实 DSA 同步返回 data_snapshot_id：预登记，但仍等 execution 完成并校验质量
+                fields["data_snapshot_id"] = snap_id
+            self.store.update_campaign(campaign_id, **fields)
             return
-        snap_id = self._resolve_data_snapshot_id(campaign)
-        if snap_id:
-            self.store.update_campaign(campaign_id, data_snapshot_id=snap_id, current_stage="FACTOR_INVENTORY", updated_at=_now())
+        build = builds[-1]
+        if build["status"] in ("queued", "running"):
+            self.store.update_campaign(campaign_id, current_stage="WAIT_DATA", updated_at=_now())
+            return
+        if build["status"] == "failed":
+            self._block_campaign(campaign, "data snapshot build failed（快照构建 execution failed）")
+            return
+        # completed / interrupted / cancelled：解析快照 id 并校验质量 valid 才晋级
+        snap_id = campaign.get("data_snapshot_id") or self._resolve_data_snapshot_id(campaign)
+        if snap_id and self._data_snapshot_valid(campaign, snap_id):
+            self.store.update_campaign(
+                campaign_id, data_snapshot_id=snap_id, current_stage="FACTOR_INVENTORY", updated_at=_now()
+            )
+            return
+        # 未解析到有效快照：留在 WAIT_DATA，不强行晋级（下轮再校验）
+        self.store.update_campaign(campaign_id, current_stage="WAIT_DATA", updated_at=_now())
+
+    def _data_snapshot_valid(self, campaign: dict[str, Any], snap_id: str) -> bool:
+        """R07：快照质量 valid（data_snapshot.v1 ``quality.status == valid``）才算就绪。"""
+        try:
+            result = self.dsa.get_data_snapshot(snap_id)
+        except (DsaUnavailableError, DsaProtocolError):
+            return False
+        if result["status"] != "ok":
+            return False
+        data = result.get("data") or {}
+        snapshot = data.get("data_snapshot") or data
+        quality = snapshot.get("quality") or {}
+        status = snapshot.get("status") or quality.get("status") or ""
+        return status == "valid"
+
+    def _ensure_universe_snapshot(self, campaign: dict[str, Any]) -> None:
+        """R08：数据快照就绪后调用 DSA universe build 获取真实 universe_snapshot_id。
+
+        universe_snapshot_id 只来自 DSA（§6.12-6.13 / §11.7），不再硬编码
+        ``universe_pit_001``；构建失败（非可重试）→ campaign blocked。
+        """
+        campaign_id = campaign["campaign_id"]
+        config = campaign.get("config", {})
+        window = config.get("development_window", {})
+        universe_snapshot_id = f"universe_{campaign_id}"
+        payload = {
+            "snapshot_id": universe_snapshot_id,
+            "market": config.get("market", "CN"),
+            "start_date": window.get("start_date"),
+            "end_date": window.get("end_date"),
+            "selection_policy_version": config.get("universe_policy") or "pit_liquid_active_v1",
+        }
+        try:
+            result = self.dsa.build_universe_snapshot(payload, idempotency_key=universe_snapshot_id)
+        except DsaUnavailableError:
+            self._mark_unavailable()
+            return
+        if result["status"] == "error":
+            if result.get("retryable"):
+                self._mark_unavailable()
+            else:
+                self._block_campaign(
+                    campaign,
+                    f"universe snapshot build failed: {(result.get('error') or {}).get('code')}",
+                )
+            return
+        data = result.get("data") or {}
+        built_id = data.get("universe_snapshot_id") or data.get("snapshot_id") or universe_snapshot_id
+        if not self._universe_snapshot_valid(campaign, built_id):
+            # 快照未确认就绪：留在 FACTOR_INVENTORY，下轮再校验
+            return
+        self.store.update_campaign(campaign_id, universe_snapshot_id=built_id, updated_at=_now())
+
+    def _universe_snapshot_valid(self, campaign: dict[str, Any], uni_id: str) -> bool:
+        """R08：universe 快照可被 DSA 查询（存在即 valid，§11.7 只落盘 valid 行）。"""
+        try:
+            result = self.dsa.get_universe_snapshot(uni_id)
+        except (DsaUnavailableError, DsaProtocolError):
+            return False
+        return result["status"] == "ok"
 
     def _resolve_data_snapshot_id(self, campaign: dict[str, Any]) -> str | None:
         if self.snapshot_id_resolver is not None:
@@ -888,7 +990,8 @@ class ResearchCampaignController:
             "hypothesis": hypothesis.get("hypothesis", {}),
             "research_window": window,
             "data_snapshot_id": hypothesis.get("data_snapshot_id") or campaign["data_snapshot_id"],
-            "universe_snapshot_id": hypothesis.get("universe_snapshot_id"),
+            # R08：universe_snapshot_id 以 campaign 的真实 DSA 快照为准，hypothesis 值仅作兜底
+            "universe_snapshot_id": campaign.get("universe_snapshot_id") or hypothesis.get("universe_snapshot_id"),
             "gate_policy_version": campaign["gate_policy_version"],
             "tags": hypothesis.get("tags") or [],
         }
@@ -1144,6 +1247,15 @@ class ResearchCampaignController:
     def _start_execution(
         self, campaign: dict[str, Any], exp: dict[str, Any], candidate: dict[str, Any], exec_type: str
     ) -> None:
+        universe_snapshot_id = campaign.get("universe_snapshot_id")
+        if not universe_snapshot_id:
+            # R08：universe_snapshot_id 必须来自 DSA universe build；缺失时 blocked，
+            # 绝不回退硬编码 "universe_pit_001"。
+            self._block_campaign(
+                campaign,
+                "universe_snapshot_id missing: cannot start execution without a real DSA universe snapshot",
+            )
+            return
         exp_id = exp["experiment_id"]
         config = campaign.get("config", {})
         window = config.get("development_window", {})
@@ -1152,9 +1264,7 @@ class ResearchCampaignController:
             "candidate_id": candidate["candidate_id"],
             "candidate_version": candidate["candidate_version"],
             "data_snapshot_id": campaign["data_snapshot_id"],
-            "universe_snapshot_id": (candidate.get("manifest") or {}).get("universe_snapshot_id")
-            or campaign.get("universe_snapshot_id")
-            or "universe_pit_001",
+            "universe_snapshot_id": universe_snapshot_id,
             "window": window,
             "gate_policy_version": campaign["gate_policy_version"],
             "runtime_profile": "sandbox_smoke" if exec_type == "strategy_sandbox_smoke" else exec_type,
@@ -1265,7 +1375,16 @@ class ResearchCampaignController:
         # 组合回测完成 → 按 gate + Reviewer 决定
         if latest["status"] == "completed" and latest["execution_type"] == "portfolio_backtest":
             evidence = self.store.get_evidence(latest["evidence_id"]) if latest.get("evidence_id") else None
-            return self._decision_for_completed_backtest(campaign, exp, current, evidence, review)
+            review_pending, review_requested_at = self._execution_review_pending(campaign, latest)
+            return self._decision_for_completed_backtest(
+                campaign,
+                exp,
+                current,
+                evidence,
+                review,
+                review_pending=review_pending,
+                review_requested_at=review_requested_at,
+            )
 
         return None
 
@@ -1343,8 +1462,19 @@ class ResearchCampaignController:
         current: dict[str, Any],
         evidence: dict[str, Any] | None,
         review: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+        *,
+        review_pending: bool = False,
+        review_requested_at: str | None = None,
+    ) -> dict[str, Any] | None:
         gate_results = (evidence or {}).get("evidence", {}).get("gate_results", []) if evidence else []
+        # fail-closed（R04）：空 gate_results 表示没有真实回测指标（not_evaluable），
+        # 不允许当作“无失败”晋级，必须等真实 gate 结果再人工评审。
+        if not gate_results:
+            return {
+                "action": "request_human_review",
+                "phase": "blocked",
+                "rationale": "evidence 无 gate 结果（not_evaluable），不允许晋级；等待真实回测指标",
+            }
         gate_failed = any(g.get("status") == "fail" for g in gate_results)
         if gate_failed:
             return {"action": "abandon_candidate", "phase": "rejected", "rationale": "gate 检查失败（研究拒绝），归档候选并生成新假设"}
@@ -1357,7 +1487,51 @@ class ResearchCampaignController:
                 "phase": "promoted",
                 "rationale": "执行完成且 gate 通过；Reviewer 提出代码隐患建议但无对应执行错误，Vibe 接受结果并保留 Reviewer 意见",
             }
+        # R09 决策 B：Reviewer 是旁路意见。已发出 review 请求但未产出且未超时 → 等待；
+        # 超时后 accept，但 rationale 与最终报告标记“缺少 DSA 独立评审”（§9.3）。
+        if review is None and review_pending and not self._review_timeout_elapsed(review_requested_at):
+            return None
+        if review is None and review_pending:
+            return {
+                "action": "accept_result",
+                "phase": "promoted",
+                "rationale": f"执行完成且 gate 通过；等待 DSA 独立评审超时（§9.3），接受结果（{REVIEW_BYPASS_MARKER}）",
+            }
         return {"action": "accept_result", "phase": "promoted", "rationale": "执行完成且 gate 通过，接受结果并进入 robustness"}
+
+    def _execution_review_pending(self, campaign: dict[str, Any], exec_record: dict[str, Any] | None) -> tuple[bool, str | None]:
+        """R09：该 execution 是否在等待 DSA 独立评审（review.requested 已发出且未 review.completed）。
+
+        返回 ``(pending, requested_at)``。review.failed 也计入缺失评审：从失败事件时间起
+        进入 §9.3 超时窗口；review.completed 到货后视为已产出，清除 pending。
+        """
+        exec_id = exec_record.get("execution_id") if exec_record else None
+        if not exec_id:
+            return False, None
+        pending_at: str | None = None
+        for event in self.store.list_events(campaign["campaign_id"]):
+            if (event.get("payload") or {}).get("execution_id") != exec_id:
+                continue
+            event_type = event.get("event_type", "")
+            if event_type == "review.requested":
+                pending_at = event.get("created_at")
+            elif event_type == "review.completed":
+                pending_at = None
+            elif event_type == "review.failed":
+                pending_at = pending_at or event.get("created_at")
+        return (pending_at is not None), pending_at
+
+    def _review_timeout_elapsed(self, requested_at: str | None) -> bool:
+        """R09：是否已超过 §9.3 默认 300 秒的独立评审等待窗口。"""
+        if not requested_at:
+            return True
+        try:
+            requested = datetime.fromisoformat(str(requested_at))
+        except ValueError:
+            return True
+        if requested.tzinfo is None:
+            requested = requested.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - requested).total_seconds() >= self.review_timeout_seconds
 
     def _apply_decision(self, campaign: dict[str, Any], exp: dict[str, Any], decision: dict[str, Any]) -> None:
         action = decision["action"]
@@ -1496,8 +1670,17 @@ class ResearchCampaignController:
         if campaign["status"] in ("cancelled", "blocked", "completed"):
             return
         experiments = self.store.list_experiments(campaign_id)
+        executions = self.store.list_executions(campaign_id)
         stage = self._dominant_stage(campaign, experiments)
-        if experiments and all(e["phase"] in TERMINAL_EXPERIMENT_PHASES for e in experiments):
+        active_executions = [e for e in executions if e["status"] in ("queued", "running", "waiting_review")]
+        # R06：completed 判定必须先排除 blocked / waiting_data，且要求无活跃 execution；
+        # 否则 blocked 实验会被 “全部实验终态” 误判为 completed（原 1509 的 blocked 检查走不到）。
+        if (
+            experiments
+            and not any(e["phase"] in ("waiting_data", "blocked") for e in experiments)
+            and all(e["phase"] in TERMINAL_EXPERIMENT_PHASES for e in experiments)
+            and not active_executions
+        ):
             self.store.update_campaign(
                 campaign_id,
                 status="completed",
@@ -1590,6 +1773,7 @@ class ResearchCampaignController:
         campaign = self.store.get_campaign(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(campaign_id)
+        decisions = self.store.list_decisions(campaign_id)
         return {
             "campaign": campaign,
             "experiments": self.store.list_experiments(campaign_id),
@@ -1598,7 +1782,9 @@ class ResearchCampaignController:
             "errors": self.store.list_errors(campaign_id),
             "reviews": self.store.list_reviews(campaign_id),
             "evidence": self.store.list_evidence(campaign_id),
-            "decisions": self.store.list_decisions(campaign_id),
+            "decisions": decisions,
             "repairs": self.store.list_repairs(campaign_id),
             "events": self.store.list_events(campaign_id),
+            # R09：是否存在在缺少 DSA 独立评审（§9.3 超时旁路）情况下做出的决定
+            "review_bypassed": any(REVIEW_BYPASS_MARKER in (d.get("rationale") or "") for d in decisions),
         }

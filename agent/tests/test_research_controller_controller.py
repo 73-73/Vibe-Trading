@@ -8,6 +8,7 @@ cursor-expired block path.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -443,3 +444,458 @@ def test_poll_interval_active_vs_idle(tmp_path: Path, mock: MockDsaServer) -> No
     assert compute_poll_interval(any_active_execution=False, any_waiting_review=True) == 5.0
     assert compute_poll_interval(any_active_execution=False, any_waiting_review=False) == 15.0
     assert compute_poll_interval(any_active_execution=True, any_waiting_review=False, backoff_seconds=100) == 60.0
+
+
+# ---------------------------------------------------------------------------
+# R04 fail-closed：portfolio_backtest 空 gate_results 不允许晋级（§6.10）
+# ---------------------------------------------------------------------------
+
+
+def _seed_completed_portfolio_backtest(
+    store: CampaignStore, campaign_id: str, *, gate_results: list[dict]
+) -> tuple[str, str, str]:
+    """在 Vibe store 中直接构造一条 completed 的 portfolio_backtest 执行与 evidence。
+
+    复用与真实流水线一致的 store 记录形状，绕开 DSA mock（mock 固定返回带
+    gate_results 的 golden evidence，无法覆盖空 gate 场景）。
+    """
+    now = "2026-08-01T00:00:00+00:00"
+    exp_id = "exp_gate_fail_closed_001"
+    candidate_id = "candidate_gate_001"
+    store.upsert_experiment(
+        {
+            "experiment_id": exp_id,
+            "campaign_id": campaign_id,
+            "round_id": "round_1",
+            "objective": "R04 gate fail-closed test",
+            "hypothesis": {"mechanism": "m", "prediction": "p", "failure_conditions": []},
+            "status": "running",
+            "phase": "promoted",
+            "data_snapshot_id": None,
+            "universe_snapshot_id": "universe_pit_001",
+            "gate_policy_version": "gate_champion_v1",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    store.upsert_candidate(
+        {
+            "candidate_id": candidate_id,
+            "candidate_version": 1,
+            "campaign_id": campaign_id,
+            "experiment_id": exp_id,
+            "parent_version": None,
+            "repair_of_error_id": None,
+            "contract_version": "strategy-signal.v1",
+            "manifest": {"factor_ids": ["qlib158_mom_20"]},
+            "source_sha256": "0" * 64,
+            "status": "validated",
+            "created_at": now,
+        }
+    )
+    execution_id = "exec_gate_fail_closed_001"
+    evidence_id = "evidence_gate_fail_closed_001"
+    store.upsert_execution(
+        {
+            "execution_id": execution_id,
+            "campaign_id": campaign_id,
+            "experiment_id": exp_id,
+            "candidate_id": candidate_id,
+            "candidate_version": 1,
+            "execution_type": "portfolio_backtest",
+            "status": "completed",
+            "progress": 1.0,
+            "current_stage": "completed",
+            "evidence_id": evidence_id,
+            "created_at": now,
+            "started_at": now,
+            "finished_at": now,
+        }
+    )
+    store.upsert_evidence(
+        {
+            "evidence_id": evidence_id,
+            "campaign_id": campaign_id,
+            "experiment_id": exp_id,
+            "execution_id": execution_id,
+            "evidence": {
+                "evidence_id": evidence_id,
+                "experiment_id": exp_id,
+                "execution_id": execution_id,
+                "execution_type": "portfolio_backtest",
+                "status": "completed",
+                "metrics": {
+                    "rank_ic": {"status": "computed", "artifact_id": "artifact_rank_ic_001"},
+                    "shared_capital_portfolio": {"status": "computed", "artifact_id": "artifact_portfolio_001"},
+                },
+                "gate_results": gate_results,
+            },
+            "created_at": now,
+        }
+    )
+    return exp_id, candidate_id, execution_id
+
+
+def _insert_review_requested_event(
+    store: CampaignStore, campaign_id: str, exp_id: str, execution_id: str, *, created_at: str
+) -> None:
+    """在 store 中插入一条 review.requested 事件（R09 超时窗口判断）。"""
+    store.insert_event(
+        {
+            "message_id": f"evt_review_req_{execution_id}",
+            "campaign_id": campaign_id,
+            "experiment_id": exp_id,
+            "sequence": 500,
+            "producer": "dsa_reviewer",
+            "event_type": "review.requested",
+            "correlation_id": None,
+            "causation_id": None,
+            "payload": {"execution_id": execution_id},
+            "artifact_refs": [],
+            "created_at": created_at,
+        }
+    )
+
+
+def _decision_for_seeded_backtest(store: CampaignStore, ctrl: ResearchCampaignController, campaign_id: str) -> dict:
+    campaign = store.get_campaign(campaign_id)
+    exp_id = store.list_experiments(campaign_id)[-1]["experiment_id"]
+    exp = store.get_experiment(exp_id)
+    current = store.list_candidates_for_experiment(campaign_id, exp_id)[-1]
+    return ctrl._compute_decision(campaign, exp, current)
+
+
+def test_completed_backtest_empty_gate_results_blocks_promotion(tmp_path: Path) -> None:
+    """R04：portfolio_backtest 返回空 gate_results（占位 evidence）-> request_human_review/blocked，
+    不晋级 accept_result/promoted。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_completed_portfolio_backtest(store, campaign_id, gate_results=[])
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is not None
+    assert decision["action"] == "request_human_review"
+    assert decision["phase"] == "blocked"
+    assert "gate" in decision["rationale"]
+
+
+def test_completed_backtest_with_pass_gate_results_promotes(tmp_path: Path) -> None:
+    """对照：portfolio_backtest 有 pass gate_results -> accept_result/promoted（未过度收紧）。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_completed_portfolio_backtest(
+        store,
+        campaign_id,
+        gate_results=[{"check_id": "coverage", "status": "pass", "observed": 0.94, "operator": ">=", "threshold": 0.8}],
+    )
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is not None
+    assert decision["action"] == "accept_result"
+    assert decision["phase"] == "promoted"
+
+
+def test_completed_backtest_with_gate_failure_rejects(tmp_path: Path) -> None:
+    """对照：portfolio_backtest 有 fail gate_results -> abandon_candidate/rejected（既有语义保持）。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_completed_portfolio_backtest(
+        store,
+        campaign_id,
+        gate_results=[{"check_id": "coverage", "status": "fail", "observed": 0.3, "operator": ">=", "threshold": 0.8}],
+    )
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is not None
+    assert decision["action"] == "abandon_candidate"
+    assert decision["phase"] == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# R06：blocked / waiting_data 实验不得把 campaign 误判为 completed（§13）
+# ---------------------------------------------------------------------------
+
+
+def _seed_blocked_phase_experiment(store: CampaignStore, campaign_id: str, phase: str) -> None:
+    now = "2026-08-01T00:00:00+00:00"
+    store.upsert_experiment(
+        {
+            "experiment_id": f"exp_{phase}_001",
+            "campaign_id": campaign_id,
+            "round_id": "round_1",
+            "objective": f"R06 {phase} test",
+            "hypothesis": {"mechanism": "m", "prediction": "p", "failure_conditions": []},
+            "status": "running",
+            "phase": phase,
+            "data_snapshot_id": None,
+            "universe_snapshot_id": "universe_campaign_x",
+            "gate_policy_version": "gate_champion_v1",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+
+def test_blocked_experiment_keeps_campaign_blocked(tmp_path: Path) -> None:
+    """R06：blocked 实验在 TERMINAL_EXPERIMENT_PHASES 内，但 campaign 必须 blocked 而非 completed。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_blocked_phase_experiment(store, campaign_id, "blocked")
+
+    ctrl._sync_campaign_status(campaign_id)
+    campaign = store.get_campaign(campaign_id)
+    assert campaign["status"] == "blocked"
+    assert campaign["current_stage"] == "VIBE_DECISION"
+
+
+def test_waiting_data_experiment_keeps_campaign_blocked(tmp_path: Path) -> None:
+    """R06：waiting_data 实验同样不能把 campaign 判成 completed。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_blocked_phase_experiment(store, campaign_id, "waiting_data")
+
+    ctrl._sync_campaign_status(campaign_id)
+    campaign = store.get_campaign(campaign_id)
+    assert campaign["status"] == "blocked"
+
+
+def test_terminal_experiments_with_active_execution_not_completed(tmp_path: Path) -> None:
+    """R06：全部实验终态但仍有活跃 execution 时不得提前 completed。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_blocked_phase_experiment(store, campaign_id, "completed")
+    now = "2026-08-01T00:00:00+00:00"
+    store.upsert_execution(
+        {
+            "execution_id": "exec_active_001",
+            "campaign_id": campaign_id,
+            "experiment_id": "exp_completed_001",
+            "execution_type": "robustness",
+            "status": "running",
+            "progress": 0.5,
+            "created_at": now,
+        }
+    )
+
+    ctrl._sync_campaign_status(campaign_id)
+    assert store.get_campaign(campaign_id)["status"] != "completed"
+
+
+# ---------------------------------------------------------------------------
+# R07：数据快照构建是异步的，未完成时 campaign 停在 WAIT_DATA（§6.12）
+# ---------------------------------------------------------------------------
+
+
+def test_data_snapshot_build_incomplete_stays_wait_data(tmp_path: Path) -> None:
+    """R07：快照构建 execution 未完成（queued）→ campaign 停在 WAIT_DATA，不提前进 FACTOR_INVENTORY。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    store.update_campaign(campaign_id, status="running")
+    store.upsert_execution(
+        {
+            "execution_id": "exec_snap_pending_001",
+            "campaign_id": campaign_id,
+            "experiment_id": "",
+            "execution_type": "data_snapshot_build",
+            "status": "queued",
+            "progress": 0.0,
+            "created_at": "2026-08-01T00:00:00+00:00",
+        }
+    )
+
+    ctrl.run_pipeline_once(campaign_id)
+    campaign = store.get_campaign(campaign_id)
+    assert campaign["status"] == "running"
+    assert campaign["current_stage"] == "WAIT_DATA"
+    assert campaign["data_snapshot_id"] is None
+
+
+def test_data_snapshot_build_failed_blocks_campaign(tmp_path: Path) -> None:
+    """R07：快照构建 execution failed → campaign blocked（快照构建失败）。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    store.update_campaign(campaign_id, status="running")
+    store.upsert_execution(
+        {
+            "execution_id": "exec_snap_failed_001",
+            "campaign_id": campaign_id,
+            "experiment_id": "",
+            "execution_type": "data_snapshot_build",
+            "status": "failed",
+            "progress": 0.5,
+            "created_at": "2026-08-01T00:00:00+00:00",
+        }
+    )
+
+    ctrl.run_pipeline_once(campaign_id)
+    campaign = store.get_campaign(campaign_id)
+    assert campaign["status"] == "blocked"
+    assert "snapshot" in (campaign["blocked_reason"] or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# R08：universe_snapshot_id 只来自 DSA universe build，缺失时 blocked（§11.7）
+# ---------------------------------------------------------------------------
+
+
+def test_start_execution_missing_universe_blocks_not_hardcoded(tmp_path: Path) -> None:
+    """R08：campaign 无 universe_snapshot_id 时 _start_execution blocked，绝不硬编码 universe_pit_001。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    store.update_campaign(campaign_id, status="running", data_snapshot_id="data_dev_001")
+    now = "2026-08-01T00:00:00+00:00"
+    store.upsert_experiment(
+        {
+            "experiment_id": "exp_universe_missing_001",
+            "campaign_id": campaign_id,
+            "round_id": "round_1",
+            "objective": "R08 universe missing",
+            "hypothesis": {"mechanism": "m", "prediction": "p", "failure_conditions": []},
+            "status": "running",
+            "phase": "candidate_built",
+            "data_snapshot_id": "data_dev_001",
+            "universe_snapshot_id": None,
+            "gate_policy_version": "gate_champion_v1",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    store.upsert_candidate(
+        {
+            "candidate_id": "candidate_universe_001",
+            "candidate_version": 1,
+            "campaign_id": campaign_id,
+            "experiment_id": "exp_universe_missing_001",
+            "parent_version": None,
+            "repair_of_error_id": None,
+            "contract_version": "strategy-signal.v1",
+            "manifest": {"factor_ids": ["qlib158_mom_20"]},
+            "source_sha256": "0" * 64,
+            "status": "validated",
+            "created_at": now,
+        }
+    )
+    campaign = store.get_campaign(campaign_id)
+    exp = store.get_experiment("exp_universe_missing_001")
+    current = store.list_candidates_for_experiment(campaign_id, "exp_universe_missing_001")[-1]
+
+    ctrl._start_execution(campaign, exp, current, "strategy_sandbox_smoke")
+    blocked = store.get_campaign(campaign_id)
+    assert blocked["status"] == "blocked"
+    assert blocked["blocked_reason"] and "universe" in blocked["blocked_reason"]
+
+
+def test_happy_path_uses_real_universe_snapshot_id(tmp_path: Path, mock: MockDsaServer) -> None:
+    """R08：happy path 的 universe_snapshot_id 来自 DSA universe build，不再是 universe_pit_001。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, mock.base_url, hypothesis_generator=_one_hypothesis_generator)
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _drive_to_complete(ctrl, campaign_id)
+
+    campaign = ctrl.get_campaign(campaign_id)
+    assert campaign["status"] == "completed"
+    assert campaign["universe_snapshot_id"]
+    assert campaign["universe_snapshot_id"].startswith("universe_")
+    assert campaign["universe_snapshot_id"] != "universe_pit_001"
+
+
+# ---------------------------------------------------------------------------
+# R09 决策 B：Reviewer 是旁路意见，§9.3 超时窗口（默认 300 秒）
+# ---------------------------------------------------------------------------
+
+
+def test_review_requested_untimed_out_defers_decision(tmp_path: Path) -> None:
+    """R09：review 请求已发出但未产出且未超时 → 不决策（等待 §9.3 窗口）。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_completed_portfolio_backtest(
+        store,
+        campaign_id,
+        gate_results=[{"check_id": "coverage", "status": "pass", "observed": 0.94, "operator": ">=", "threshold": 0.8}],
+    )
+    exp_id = store.list_experiments(campaign_id)[-1]["experiment_id"]
+    execution_id = store.list_executions(campaign_id)[-1]["execution_id"]
+    _insert_review_requested_event(
+        store, campaign_id, exp_id, execution_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is None
+
+
+def test_review_requested_timed_out_accepts_with_marker(tmp_path: Path) -> None:
+    """R09：超过 §9.3 等待窗口后 accept，rationale 标记“缺少 DSA 独立评审”。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    _seed_completed_portfolio_backtest(
+        store,
+        campaign_id,
+        gate_results=[{"check_id": "coverage", "status": "pass", "observed": 0.94, "operator": ">=", "threshold": 0.8}],
+    )
+    exp_id = store.list_experiments(campaign_id)[-1]["experiment_id"]
+    execution_id = store.list_executions(campaign_id)[-1]["execution_id"]
+    old = (datetime.now(timezone.utc) - timedelta(seconds=301)).isoformat()
+    _insert_review_requested_event(store, campaign_id, exp_id, execution_id, created_at=old)
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is not None
+    assert decision["action"] == "accept_result"
+    assert "缺少 DSA 独立评审" in decision["rationale"]
+
+
+def test_review_completed_uses_review_normally(tmp_path: Path) -> None:
+    """对照（R09）：review 已产出时走既有 Reviewer 逻辑，不进入超时旁路。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, "http://127.0.0.1:1")
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+    exp_id, _candidate_id, execution_id = _seed_completed_portfolio_backtest(
+        store,
+        campaign_id,
+        gate_results=[{"check_id": "coverage", "status": "pass", "observed": 0.94, "operator": ">=", "threshold": 0.8}],
+    )
+    now = "2026-08-01T00:00:00+00:00"
+    # review 已产出：execution 挂上 review_id，review 记录在 reviews 表
+    store.update_execution(execution_id, review_id="review_seeded_001")
+    store.upsert_review(
+        {
+            "review_id": "review_seeded_001",
+            "campaign_id": campaign_id,
+            "experiment_id": exp_id,
+            "execution_id": execution_id,
+            "classification": "code_bug",
+            "confidence": 0.8,
+            "root_causes": [{"evidence_ref": "e1", "finding": "除数可能为零"}],
+            "gate_assessment": None,
+            "repair_contract": {"repairable": True, "allowed_changes": [], "forbidden_changes": []},
+            "recommended_action": "submit_candidate_revision",
+            "recommended_tests": [],
+            "limitations": [],
+            "model": "mock",
+            "prompt_version": "v1",
+            "prompt_hash": "",
+            "input_evidence_hash": "",
+            "created_at": now,
+        }
+    )
+    # 有 review.requested 事件（未超时）但 review 已产出：仍应走 Reviewer 建议而非等待
+    _insert_review_requested_event(
+        store, campaign_id, exp_id, execution_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    decision = _decision_for_seeded_backtest(store, ctrl, campaign_id)
+    assert decision is not None
+    assert decision["action"] == "accept_result"
+    assert "缺少 DSA 独立评审" not in decision["rationale"]
