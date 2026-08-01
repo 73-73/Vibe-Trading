@@ -1,4 +1,5 @@
 {
+  "contract_bundle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "protocol_versions": ["research-loop.v1"],
   "strategy_contracts": ["strategy-signal.v1"],
   "research_sdk_versions": ["research_sdk.v1"],
@@ -13,8 +14,52 @@
   "execution_types": [
     "data_snapshot_build",
     "market_panel_export",
-    "strategy_sandbox_smoke"
+    "factor_snapshot_validate",
+    "factor_smoke",
+    "factor_screen",
+    "gate_challenger"
   ],
+  "readiness": {
+    "sandbox": {
+      "status": "not_ready",
+      "available": false,
+      "ready": false,
+      "reason": "not verified"
+    },
+    "reviewer": {
+      "status": "not_ready",
+      "available": false,
+      "ready": false,
+      "reason": "not verified"
+    },
+    "data": {
+      "status": "not_ready",
+      "available": false,
+      "ready": false,
+      "reason": "not verified"
+    },
+    "universe": {
+      "status": "not_ready",
+      "available": false,
+      "ready": false,
+      "reason": "not verified"
+    },
+    "longbridge": {
+      "status": "not_ready",
+      "available": false,
+      "ready": false,
+      "reason": "not verified"
+    }
+  },
+  "artifact_uploads": {
+    "schema_version": "artifact_upload_capabilities.v1",
+    "allowlist": {
+      "factor_values": [
+        "application/vnd.apache.parquet",
+        "text/csv"
+      ]
+    }
+  },
   "limits": {
     "candidate_source_bytes": 65536,
     "artifact_upload_bytes_max": 5368709120,

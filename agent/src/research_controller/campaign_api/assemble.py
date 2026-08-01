@@ -17,7 +17,48 @@ from src.research_controller.state_machine.driver import CampaignDriver
 AuthDep = Callable[..., Awaitable[Any] | Any]
 
 
-def register_research_campaign(app: FastAPI, require_auth: AuthDep | None = None) -> None:
+def _build_production_controller(
+    *,
+    store_factory: Callable[[], Any] | None = None,
+    client_factory: Callable[[], Any] | None = None,
+    generator_factory: Callable[[], Any] | None = None,
+) -> Any:
+    """Build the production controller with an online, verified LLM generator.
+
+    The optional factories are explicit test seams.  The production call path
+    supplies none of them and therefore has no deterministic/placeholder
+    fallback: missing configuration, transport failure or a malformed provider
+    response aborts assembly before any Campaign can run.
+    """
+    from src.research_controller.client.dsa_client import DsaLoopClient
+    from src.research_controller.generation.production import ProductionResearchGenerators
+    from src.research_controller.state_machine.controller import ResearchCampaignController
+    from src.research_controller.store.campaign_store import CampaignStore
+
+    store = (store_factory or CampaignStore)()
+    generators = (
+        generator_factory()
+        if generator_factory is not None
+        else ProductionResearchGenerators.from_environment(
+            usage_recorder=store.record_budget_usage,
+        )
+    )
+    generators.verify_online()
+    return ResearchCampaignController(
+        store=store,
+        dsa_client=(client_factory or DsaLoopClient)(),
+        hypothesis_generator=generators.hypothesis_generator,
+        code_generator=generators.code_generator,
+        require_longbridge=True,
+    )
+
+
+def register_research_campaign(
+    app: FastAPI,
+    require_auth: AuthDep | None = None,
+    *,
+    _test_generator_factory: Callable[[], Any] | None = None,
+) -> None:
     """Mount §7.2 Research Campaign routes (lazy controller) + background driver.
 
     - ``set_controller_factory`` / ``register_research_campaign_routes`` 与之前一致。
@@ -30,12 +71,12 @@ def register_research_campaign(app: FastAPI, require_auth: AuthDep | None = None
         register_research_campaign_routes,
         set_controller_factory,
     )
-    from src.research_controller.client.dsa_client import DsaLoopClient
-    from src.research_controller.state_machine.controller import ResearchCampaignController
-    from src.research_controller.store.campaign_store import CampaignStore
 
-    def _factory() -> ResearchCampaignController:
-        return ResearchCampaignController(store=CampaignStore(), dsa_client=DsaLoopClient())
+    def _factory() -> Any:
+        # §17.2 production preparation includes the real Longbridge forward
+        # observation provider.  Unit tests may opt out explicitly, but the
+        # assembled service must never silently downgrade this requirement.
+        return _build_production_controller(generator_factory=_test_generator_factory)
 
     set_controller_factory(_factory)
     register_research_campaign_routes(app, require_auth=require_auth)

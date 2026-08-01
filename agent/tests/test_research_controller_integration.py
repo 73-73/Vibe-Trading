@@ -27,6 +27,7 @@ import pytest
 
 from tests.research_loop_test_helpers import (
     DSA_BACKTEST_LAB_PATH,
+    ready_capabilities_provider,
     sample_campaign_request,
 )
 from src.research_controller.client.dsa_client import DsaLoopClient
@@ -129,7 +130,11 @@ def _drive(ctrl: ResearchCampaignController, campaign_id: str, max_iters: int = 
 
 def test_end_to_end_happy_path_over_real_http(tmp_path: Path, mock_process: _MockProcess) -> None:
     store = CampaignStore(db_path=tmp_path / "c.db")
-    ctrl = ResearchCampaignController(store, DsaLoopClient(base_url=mock_process.base_url))
+    ctrl = ResearchCampaignController(
+        store,
+        DsaLoopClient(base_url=mock_process.base_url),
+        capabilities_provider=ready_capabilities_provider,
+    )
     campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
 
     summary = _drive(ctrl, campaign_id)
@@ -152,7 +157,11 @@ def test_end_to_end_happy_path_over_real_http(tmp_path: Path, mock_process: _Moc
 def test_end_to_end_repair_lineage_over_real_http(tmp_path: Path) -> None:
     with _MockProcess("execution_failure") as proc:
         store = CampaignStore(db_path=tmp_path / "c.db")
-        ctrl = ResearchCampaignController(store, DsaLoopClient(base_url=proc.base_url))
+        ctrl = ResearchCampaignController(
+            store,
+            DsaLoopClient(base_url=proc.base_url),
+            capabilities_provider=ready_capabilities_provider,
+        )
         campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
         _drive(ctrl, campaign_id)
 
@@ -176,7 +185,11 @@ def test_end_to_end_repair_lineage_over_real_http(tmp_path: Path) -> None:
 def test_restart_recovery_no_duplicate_tasks_over_real_http(tmp_path: Path, mock_process: _MockProcess) -> None:
     db_path = tmp_path / "c.db"
     store = CampaignStore(db_path=db_path)
-    ctrl = ResearchCampaignController(store, DsaLoopClient(base_url=mock_process.base_url))
+    ctrl = ResearchCampaignController(
+        store,
+        DsaLoopClient(base_url=mock_process.base_url),
+        capabilities_provider=ready_capabilities_provider,
+    )
     campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
     for _ in range(8):
         ctrl.run_pipeline_once(campaign_id)
@@ -186,7 +199,11 @@ def test_restart_recovery_no_duplicate_tasks_over_real_http(tmp_path: Path, mock
 
     # 模拟 Vibe 重启：新 store + 新 controller，同一 db 与同一 DSA
     store2 = CampaignStore(db_path=db_path)
-    ctrl2 = ResearchCampaignController(store2, DsaLoopClient(base_url=mock_process.base_url))
+    ctrl2 = ResearchCampaignController(
+        store2,
+        DsaLoopClient(base_url=mock_process.base_url),
+        capabilities_provider=ready_capabilities_provider,
+    )
     _drive(ctrl2, campaign_id)
 
     candidates_after = [(c["candidate_id"], c["candidate_version"]) for c in ctrl2.get_candidates(campaign_id)]
@@ -200,7 +217,11 @@ def test_restart_recovery_no_duplicate_tasks_over_real_http(tmp_path: Path, mock
 def test_locked_holdout_never_reached(tmp_path: Path, mock_process: _MockProcess) -> None:
     """§7.2.5：Campaign 自动队列永远不能携带 locked-holdout 授权。"""
     store = CampaignStore(db_path=tmp_path / "c.db")
-    ctrl = ResearchCampaignController(store, DsaLoopClient(base_url=mock_process.base_url))
+    ctrl = ResearchCampaignController(
+        store,
+        DsaLoopClient(base_url=mock_process.base_url),
+        capabilities_provider=ready_capabilities_provider,
+    )
     with pytest.raises(Exception):
         ctrl.create_campaign(
             sample_campaign_request(development_window={"start_date": "2022-01-01", "end_date": "2025-12-31"})

@@ -35,6 +35,10 @@ _SCHEMA_VERSION = 1
 _DEFAULT_DB_RELPATH = "research_controller/campaigns.db"
 
 
+class IdempotencyConflictError(ValueError):
+    """The same action/key was reused for a different canonical request."""
+
+
 def _default_db_path() -> Path:
     return get_runtime_root() / _DEFAULT_DB_RELPATH
 
@@ -112,6 +116,7 @@ class CampaignStore:
                   budget_usage_json TEXT NOT NULL,
                   last_event_sequences_json TEXT NOT NULL,
                   config_json TEXT NOT NULL,
+                  preflight_json TEXT NOT NULL DEFAULT '{}',
                   blocked_reason TEXT,
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL
@@ -175,6 +180,16 @@ class CampaignStore:
                   artifact_refs_json TEXT NOT NULL,
                   created_at TEXT NOT NULL,
                   UNIQUE (experiment_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS experiment_state_snapshots (
+                  snapshot_id TEXT PRIMARY KEY,
+                  campaign_id TEXT NOT NULL,
+                  experiment_id TEXT NOT NULL,
+                  through_sequence INTEGER NOT NULL,
+                  state_sha256 TEXT NOT NULL,
+                  snapshot_json TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  applied_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS errors (
                   error_id TEXT PRIMARY KEY,
@@ -271,12 +286,40 @@ class CampaignStore:
                   created_at TEXT NOT NULL,
                   PRIMARY KEY (campaign_id, report_id)
                 );
+                CREATE TABLE IF NOT EXISTS cancellation_intents (
+                  execution_id TEXT PRIMARY KEY,
+                  campaign_id TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  attempt_count INTEGER NOT NULL DEFAULT 0,
+                  last_remote_status TEXT,
+                  diagnostic_code TEXT,
+                  diagnostic_message TEXT,
+                  requested_at TEXT NOT NULL,
+                  last_attempt_at TEXT,
+                  resolved_at TEXT,
+                  updated_at TEXT NOT NULL
+                );
                 """
             )
+            # Forward-only migration for databases created before Campaign
+            # preflight became a durable, user-visible contract.  Keeping the
+            # report on the campaign row makes a restart preserve the exact
+            # blockers that prevented execution.
+            campaign_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(campaigns)").fetchall()
+            }
+            if "preflight_json" not in campaign_columns:
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN preflight_json TEXT NOT NULL DEFAULT '{}'"
+                )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_experiments_campaign ON experiments(campaign_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_campaign ON candidates(campaign_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_campaign ON executions(campaign_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_experiment ON events(experiment_id, sequence)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cancellation_campaign_status "
+                "ON cancellation_intents(campaign_id, status)"
+            )
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -356,6 +399,111 @@ class CampaignStore:
                 self._update_campaign_row(conn, campaign_id, fields)
 
         self._tx(self._connect(), _run)
+
+    def restore_experiment_state_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        campaign_id: str,
+        experiment_id: str,
+        snapshot: dict[str, Any],
+        executions: list[dict[str, Any]],
+        errors: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        reviews: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Atomically persist and apply a verified DSA state snapshot.
+
+        The caller validates the protocol model and ``state_sha256`` before
+        entering this store primitive.  The transaction records the immutable
+        recovery input, upserts the authoritative execution summaries, updates
+        the experiment status, and advances the event cursor to the snapshot's
+        inclusive ``through_sequence``.  A crash can therefore expose either
+        the complete restore or the previous local state, never a cursor that
+        skipped state mutations (§11.9 / §16).
+        """
+
+        payload = _dumps(snapshot)
+        through_sequence = int(snapshot["through_sequence"])
+        state_sha256 = str(snapshot["state_sha256"])
+
+        def _run(conn: sqlite3.Connection) -> None:
+            campaign = conn.execute(
+                "SELECT last_event_sequences_json FROM campaigns WHERE campaign_id=?",
+                (campaign_id,),
+            ).fetchone()
+            experiment = conn.execute(
+                "SELECT 1 FROM experiments WHERE experiment_id=? AND campaign_id=?",
+                (experiment_id, campaign_id),
+            ).fetchone()
+            if campaign is None or experiment is None:
+                raise ValueError("state snapshot references unknown local campaign/experiment")
+
+            existing = conn.execute(
+                "SELECT state_sha256, snapshot_json FROM experiment_state_snapshots WHERE snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if existing is not None and (
+                existing["state_sha256"] != state_sha256 or existing["snapshot_json"] != payload
+            ):
+                raise ValueError("state snapshot id was reused with different immutable content")
+            conn.execute(
+                """INSERT OR IGNORE INTO experiment_state_snapshots
+                   (snapshot_id, campaign_id, experiment_id, through_sequence,
+                    state_sha256, snapshot_json, created_at, applied_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    snapshot_id,
+                    campaign_id,
+                    experiment_id,
+                    through_sequence,
+                    state_sha256,
+                    payload,
+                    snapshot["created_at"],
+                    _now(),
+                ),
+            )
+
+            for record in executions:
+                self._insert_execution_row(conn, record)
+            for record in errors or []:
+                self._upsert_error_row(conn, record)
+            for record in evidence or []:
+                self._upsert_evidence_row(conn, record)
+            for record in reviews or []:
+                self._upsert_review_row(conn, record)
+
+            conn.execute(
+                "UPDATE experiments SET status=?, updated_at=? WHERE experiment_id=?",
+                (snapshot["status"], _now(), experiment_id),
+            )
+            cursors = _loads(campaign["last_event_sequences_json"], {})
+            cursors[experiment_id] = max(int(cursors.get(experiment_id, 0)), through_sequence)
+            conn.execute(
+                "UPDATE campaigns SET last_event_sequences_json=?, updated_at=? WHERE campaign_id=?",
+                (_dumps(cursors), _now(), campaign_id),
+            )
+
+        self._tx(self._connect(), _run)
+
+    def get_experiment_state_snapshot(self, snapshot_id: str) -> dict[str, Any] | None:
+        """Return one applied recovery snapshot for audit/tests."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM experiment_state_snapshots WHERE snapshot_id=?", (snapshot_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "snapshot_id": row["snapshot_id"],
+            "campaign_id": row["campaign_id"],
+            "experiment_id": row["experiment_id"],
+            "through_sequence": int(row["through_sequence"]),
+            "state_sha256": row["state_sha256"],
+            "snapshot": _loads(row["snapshot_json"], {}),
+            "created_at": row["created_at"],
+            "applied_at": row["applied_at"],
+        }
 
     # ------------------------------------------------------------------
     # Row writers (accept an open connection)
@@ -517,6 +665,7 @@ class CampaignStore:
             "queue_counts_json",
             "budget_usage_json",
             "last_event_sequences_json",
+            "preflight_json",
             "blocked_reason",
             "updated_at",
         }
@@ -582,8 +731,8 @@ class CampaignStore:
             """INSERT INTO campaigns (campaign_id, research_goal_id, status, current_stage,
                config_sha256, protocol_bundle_sha256, data_snapshot_id, universe_snapshot_id,
                gate_policy_version, factor_inventory_json, queue_counts_json, budget_usage_json,
-               last_event_sequences_json, config_json, blocked_reason, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               last_event_sequences_json, config_json, preflight_json, blocked_reason, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 record["campaign_id"],
                 record["research_goal_id"],
@@ -599,6 +748,7 @@ class CampaignStore:
                 _dumps(record.get("budget_usage", {})),
                 _dumps(record.get("last_event_sequences", {})),
                 _dumps(record.get("config", {})),
+                _dumps(record.get("preflight", {})),
                 record.get("blocked_reason"),
                 record["created_at"],
                 record["updated_at"],
@@ -733,6 +883,158 @@ class CampaignStore:
             rows = conn.execute(query, params).fetchall()
         return [self._campaign_row(r) for r in rows]
 
+    def begin_campaign_cancellation(
+        self,
+        campaign_id: str,
+        execution_ids: list[str],
+        *,
+        requested_at: str,
+    ) -> None:
+        """Atomically stop campaign advancement and persist every cancel intent."""
+
+        def _run(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE campaigns SET status='cancelled', current_stage='CANCELLED', updated_at=? "
+                "WHERE campaign_id=? AND status!='completed'",
+                (requested_at, campaign_id),
+            )
+            for execution_id in execution_ids:
+                conn.execute(
+                    """INSERT OR IGNORE INTO cancellation_intents (
+                       execution_id, campaign_id, status, attempt_count,
+                       requested_at, updated_at)
+                       VALUES (?, ?, 'pending', 0, ?, ?)""",
+                    (execution_id, campaign_id, requested_at, requested_at),
+                )
+
+        self._tx(self._connect(), _run)
+
+    def list_cancellation_intents(
+        self,
+        campaign_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM cancellation_intents WHERE campaign_id=?"
+        params: list[Any] = [campaign_id]
+        if status is not None:
+            query += " AND status=?"
+            params.append(status)
+        query += " ORDER BY requested_at ASC, execution_id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._cancellation_intent_row(row) for row in rows]
+
+    def has_pending_cancellations(self, campaign_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM cancellation_intents WHERE campaign_id=? AND status='pending' LIMIT 1",
+                (campaign_id,),
+            ).fetchone()
+        return row is not None
+
+    def has_unresolved_cancellations(self, campaign_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM cancellation_intents "
+                "WHERE campaign_id=? AND status!='resolved' LIMIT 1",
+                (campaign_id,),
+            ).fetchone()
+        return row is not None
+
+    def retry_blocked_cancellations(self, campaign_id: str, *, retried_at: str) -> int:
+        """Explicit operator action: make visible blocked intents runnable again."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """UPDATE cancellation_intents
+                   SET status='pending', updated_at=?
+                   WHERE campaign_id=? AND status='blocked'""",
+                (retried_at, campaign_id),
+            )
+            conn.commit()
+        return int(cursor.rowcount)
+
+    def record_cancellation_attempt(
+        self,
+        execution_id: str,
+        *,
+        attempted_at: str,
+        diagnostic_code: str | None,
+        diagnostic_message: str | None,
+        last_remote_status: str | None = None,
+        status: str = "pending",
+    ) -> None:
+        resolved_at = attempted_at if status in ("resolved", "blocked") else None
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE cancellation_intents
+                   SET status=?, attempt_count=attempt_count+1,
+                       last_remote_status=?, diagnostic_code=?, diagnostic_message=?,
+                       last_attempt_at=?, resolved_at=?, updated_at=?
+                   WHERE execution_id=?""",
+                (
+                    status,
+                    last_remote_status,
+                    diagnostic_code,
+                    diagnostic_message,
+                    attempted_at,
+                    resolved_at,
+                    attempted_at,
+                    execution_id,
+                ),
+            )
+            conn.commit()
+
+    def resolve_cancellation(
+        self,
+        execution_id: str,
+        *,
+        execution_fields: dict[str, Any],
+        remote_status: str,
+        resolved_at: str,
+        diagnostic_code: str | None = None,
+        diagnostic_message: str | None = None,
+    ) -> None:
+        """Commit local execution convergence and intent resolution together."""
+
+        def _run(conn: sqlite3.Connection) -> None:
+            if execution_fields:
+                self._update_execution_row(conn, execution_id, execution_fields)
+            conn.execute(
+                """UPDATE cancellation_intents
+                   SET status='resolved', attempt_count=attempt_count+1,
+                       last_remote_status=?, diagnostic_code=?, diagnostic_message=?,
+                       last_attempt_at=?, resolved_at=?, updated_at=?
+                   WHERE execution_id=?""",
+                (
+                    remote_status,
+                    diagnostic_code,
+                    diagnostic_message,
+                    resolved_at,
+                    resolved_at,
+                    resolved_at,
+                    execution_id,
+                ),
+            )
+
+        self._tx(self._connect(), _run)
+
+    @staticmethod
+    def _cancellation_intent_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "execution_id": row["execution_id"],
+            "campaign_id": row["campaign_id"],
+            "status": row["status"],
+            "attempt_count": row["attempt_count"],
+            "last_remote_status": row["last_remote_status"],
+            "diagnostic_code": row["diagnostic_code"],
+            "diagnostic_message": row["diagnostic_message"],
+            "requested_at": row["requested_at"],
+            "last_attempt_at": row["last_attempt_at"],
+            "resolved_at": row["resolved_at"],
+            "updated_at": row["updated_at"],
+        }
+
     @staticmethod
     def _campaign_row(row: sqlite3.Row) -> dict[str, Any]:
         return {
@@ -750,6 +1052,7 @@ class CampaignStore:
             "budget_usage": _loads(row["budget_usage_json"], {}),
             "last_event_sequences": _loads(row["last_event_sequences_json"], {}),
             "config": _loads(row["config_json"], {}),
+            "preflight": _loads(row["preflight_json"], {}),
             "blocked_reason": row["blocked_reason"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1131,6 +1434,10 @@ class CampaignStore:
             ).fetchone()
         if row is None:
             return None
+        return self._idempotency_row(row)
+
+    @staticmethod
+    def _idempotency_row(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "action": row["action"],
             "idempotency_key": row["idempotency_key"],
@@ -1149,20 +1456,36 @@ class CampaignStore:
         response_status: int,
         response_json: str,
         resource_id: str | None,
-    ) -> None:
-        def _run(conn: sqlite3.Connection) -> None:
+    ) -> dict[str, Any]:
+        """Insert once and atomically return the immutable winning record.
+
+        A same-hash replay returns the first response in full.  Reusing the
+        action/key for a different request is an explicit conflict; no response
+        or timestamp fields are ever overwritten.
+        """
+
+        def _run(conn: sqlite3.Connection) -> dict[str, Any]:
             conn.execute(
                 """INSERT INTO idempotency (action, idempotency_key, request_sha256,
                    response_status, response_json, resource_id, created_at)
                    VALUES (?,?,?,?,?,?,?)
-                   ON CONFLICT(action, idempotency_key) DO UPDATE SET
-                     response_status=excluded.response_status,
-                     response_json=excluded.response_json,
-                     resource_id=excluded.resource_id""",
+                   ON CONFLICT(action, idempotency_key) DO NOTHING""",
                 (action, idempotency_key, request_sha256, response_status, response_json, resource_id, _now()),
             )
+            row = conn.execute(
+                "SELECT * FROM idempotency WHERE action=? AND idempotency_key=?",
+                (action, idempotency_key),
+            ).fetchone()
+            if row is None:  # pragma: no cover - INSERT/SELECT share one transaction
+                raise RuntimeError("idempotency record disappeared during save")
+            record = self._idempotency_row(row)
+            if record["request_sha256"] != request_sha256:
+                raise IdempotencyConflictError(
+                    f"idempotency conflict for action={action} key={idempotency_key}"
+                )
+            return record
 
-        self._tx(self._connect(), _run)
+        return self._tx(self._connect(), _run)
 
     # ------------------------------------------------------------------
     # Rolling budget usage (§13.3)

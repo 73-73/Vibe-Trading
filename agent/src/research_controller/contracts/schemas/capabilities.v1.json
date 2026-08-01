@@ -1,5 +1,29 @@
 {
   "$defs": {
+    "ArtifactUploadCapabilities": {
+      "additionalProperties": false,
+      "description": "允许上传的 artifact kind -> media type 版本化映射。",
+      "properties": {
+        "schema_version": {
+          "const": "artifact_upload_capabilities.v1",
+          "default": "artifact_upload_capabilities.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "allowlist": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Allowlist",
+          "type": "object"
+        }
+      },
+      "title": "ArtifactUploadCapabilities",
+      "type": "object"
+    },
     "CapabilitiesLimits": {
       "additionalProperties": false,
       "properties": {
@@ -31,6 +55,63 @@
       "title": "CapabilitiesLimits",
       "type": "object"
     },
+    "CapabilitiesReadiness": {
+      "additionalProperties": false,
+      "description": "Research Controller 启动前必须逐项检查的生产依赖。",
+      "properties": {
+        "sandbox": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "data": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "universe": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "longbridge": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        }
+      },
+      "title": "CapabilitiesReadiness",
+      "type": "object"
+    },
+    "CapabilityReadinessItem": {
+      "additionalProperties": false,
+      "description": "一个生产依赖的可机读预检状态。",
+      "properties": {
+        "status": {
+          "default": "not_ready",
+          "enum": [
+            "ready",
+            "not_ready"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "available": {
+          "default": false,
+          "title": "Available",
+          "type": "boolean"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "reason": {
+          "default": "not verified",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "title": "CapabilityReadinessItem",
+      "type": "object"
+    },
     "ExecutionType": {
       "enum": [
         "data_snapshot_build",
@@ -50,6 +131,11 @@
   },
   "additionalProperties": false,
   "properties": {
+    "contract_bundle_sha256": {
+      "default": "0000000000000000000000000000000000000000000000000000000000000000",
+      "title": "Contract Bundle Sha256",
+      "type": "string"
+    },
     "protocol_versions": {
       "items": {
         "type": "string"
@@ -133,6 +219,12 @@
       },
       "title": "Execution Types",
       "type": "array"
+    },
+    "readiness": {
+      "$ref": "#/$defs/CapabilitiesReadiness"
+    },
+    "artifact_uploads": {
+      "$ref": "#/$defs/ArtifactUploadCapabilities"
     },
     "limits": {
       "$ref": "#/$defs/CapabilitiesLimits"

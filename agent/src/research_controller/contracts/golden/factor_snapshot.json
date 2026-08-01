@@ -3,10 +3,14 @@
   "snapshot_id": "factor_snapshot_001",
   "data_snapshot_id": "data_dev_001",
   "universe_snapshot_id": "universe_pit_001",
-  "factor_ids": ["qlib158_mom_20", "gtja191_alpha099"],
+  "factor_ids": ["gtja191_099", "qlib158_rank20"],
   "formula_versions": {
-    "qlib158_mom_20": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "gtja191_alpha099": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "gtja191_099": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "qlib158_rank20": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "source_versions": {
+    "gtja191_099": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "qlib158_rank20": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
   "columns": [
     "as_of_date",

@@ -15,13 +15,15 @@ from src.research_controller.campaign_api import routes
 from src.research_controller.client.dsa_client import DsaLoopClient
 from src.research_controller.state_machine.controller import ResearchCampaignController
 from src.research_controller.store.campaign_store import CampaignStore
+from tests.research_loop_test_helpers import ready_capabilities_provider
 
 
 def _client(tmp_path: Path) -> TestClient:
-    # create_campaign 只做校验与持久化，不调用 DSA；stub base_url 永不会连接。
+    # Route smoke injects explicit test-only readiness; production uses DSA.
     controller = ResearchCampaignController(
         store=CampaignStore(db_path=tmp_path / "campaigns.db"),
         dsa_client=DsaLoopClient(base_url="http://127.0.0.1:9", timeout=0.1),
+        capabilities_provider=ready_capabilities_provider,
     )
     routes.set_controller(controller)
     return TestClient(api_server.app, client=("127.0.0.1", 50000))
@@ -47,6 +49,8 @@ def test_campaign_create_and_get(tmp_path: Path) -> None:
     assert resp.status_code == 201, resp.text
     campaign = resp.json()
     assert campaign["status"] == "initializing"
+    assert campaign["current_stage"] == "PREFLIGHT"
+    assert campaign["preflight"]["status"] == "passed"
     assert campaign["gate_policy_version"] == "gate_champion_v1"
     cid = campaign["campaign_id"]
     detail = client.get(f"/research-campaigns/{cid}")

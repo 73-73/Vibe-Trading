@@ -8,11 +8,13 @@ decisions and idempotency records.
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
 
-from src.research_controller.store.campaign_store import CampaignStore
+from src.research_controller.store.campaign_store import CampaignStore, IdempotencyConflictError
 from src.research_controller.store.canonical import canonical_json, canonical_sha256
 
 
@@ -37,6 +39,11 @@ def _campaign_record(campaign_id: str = "campaign_test_001") -> dict:
         "budget_usage": {"llm_calls_rolling_24h": 0, "candidate_versions_rolling_24h": 0},
         "last_event_sequences": {},
         "config": {"objective": "test"},
+        "preflight": {
+            "schema_version": "campaign_preflight.v1",
+            "status": "passed",
+            "blocking_items": [],
+        },
         "blocked_reason": None,
         "created_at": "2026-08-01T10:00:00+00:00",
         "updated_at": "2026-08-01T10:00:00+00:00",
@@ -49,6 +56,7 @@ def test_campaign_crud(store: CampaignStore) -> None:
     assert campaign["campaign_id"] == "campaign_test_001"
     assert campaign["status"] == "initializing"
     assert campaign["factor_inventory"]["target"] == 357
+    assert campaign["preflight"]["status"] == "passed"
 
     store.update_campaign("campaign_test_001", status="running")
     assert store.get_campaign("campaign_test_001")["status"] == "running"
@@ -63,6 +71,27 @@ def test_campaign_rows_survive_reopen(tmp_path: Path) -> None:
     # 模拟进程重启：新建 store 实例重新打开同一文件
     store2 = CampaignStore(db_path=path)
     assert store2.get_campaign("campaign_reopen")["research_goal_id"] == "goal_test_001"
+
+
+def test_existing_campaign_table_migrates_preflight_column(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """CREATE TABLE campaigns (
+              campaign_id TEXT PRIMARY KEY, research_goal_id TEXT NOT NULL,
+              status TEXT NOT NULL, current_stage TEXT NOT NULL,
+              config_sha256 TEXT NOT NULL, protocol_bundle_sha256 TEXT NOT NULL,
+              data_snapshot_id TEXT, universe_snapshot_id TEXT,
+              gate_policy_version TEXT NOT NULL, factor_inventory_json TEXT NOT NULL,
+              queue_counts_json TEXT NOT NULL, budget_usage_json TEXT NOT NULL,
+              last_event_sequences_json TEXT NOT NULL, config_json TEXT NOT NULL,
+              blocked_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )"""
+        )
+
+    migrated = CampaignStore(db_path=path)
+    migrated.create_campaign(_campaign_record("campaign_after_migration"))
+    assert migrated.get_campaign("campaign_after_migration")["preflight"]["status"] == "passed"
 
 
 def test_apply_bundle_atomic_events_cursor_and_state(store: CampaignStore) -> None:
@@ -138,10 +167,65 @@ def test_decisions_are_immutable(store: CampaignStore) -> None:
 
 
 def test_idempotency_record_roundtrip(store: CampaignStore) -> None:
-    store.save_idempotency("start_execution", "key_1", "abc", 200, '{"execution_id":"exec_1"}', "exec_1")
+    saved = store.save_idempotency(
+        "start_execution", "key_1", "abc", 200, '{"execution_id":"exec_1"}', "exec_1"
+    )
+    assert saved["resource_id"] == "exec_1"
     record = store.idempotency_lookup("start_execution", "key_1")
     assert record["resource_id"] == "exec_1"
     assert store.idempotency_lookup("start_execution", "missing") is None
+
+
+def test_idempotency_same_hash_replay_never_overwrites_first_response(store: CampaignStore) -> None:
+    first = store.save_idempotency("start_execution", "key_once", "same", 201, "first", "exec_first")
+    replay = store.save_idempotency("start_execution", "key_once", "same", 202, "second", "exec_second")
+    assert replay == first
+    assert replay["response_status"] == 201
+    assert replay["response_json"] == "first"
+    assert replay["resource_id"] == "exec_first"
+
+
+def test_idempotency_different_hash_is_explicit_conflict(store: CampaignStore) -> None:
+    first = store.save_idempotency("start_execution", "key_conflict", "hash_a", 201, "first", "exec_a")
+    with pytest.raises(IdempotencyConflictError, match="idempotency conflict"):
+        store.save_idempotency("start_execution", "key_conflict", "hash_b", 202, "second", "exec_b")
+    assert store.idempotency_lookup("start_execution", "key_conflict") == first
+
+
+def test_idempotency_two_connections_converge_on_one_immutable_winner(tmp_path: Path) -> None:
+    path = tmp_path / "concurrent.db"
+    stores = [CampaignStore(db_path=path), CampaignStore(db_path=path)]
+    barrier = threading.Barrier(2)
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    def _save(index: int) -> None:
+        try:
+            barrier.wait(timeout=2)
+            results.append(
+                stores[index].save_idempotency(
+                    "start_execution",
+                    "key_concurrent",
+                    "same_hash",
+                    200 + index,
+                    f"response_{index}",
+                    f"exec_{index}",
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_save, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert len(results) == 2
+    assert results[0] == results[1]
+    persisted = CampaignStore(db_path=path).idempotency_lookup("start_execution", "key_concurrent")
+    assert persisted == results[0]
 
 
 def test_rolling_budget_usage(store: CampaignStore) -> None:

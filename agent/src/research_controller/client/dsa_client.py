@@ -31,9 +31,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
+import zlib
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -46,6 +49,8 @@ RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _MAX_RESPONSE_BYTES = 10_000_000
 _SOURCE_CODE_MAX_BYTES = 65_536
+_MAX_ARTIFACT_BYTES = 5_000_000_000
+_ALLOWED_CONTENT_ENCODINGS = {"identity", "gzip"}
 
 # §7.1: 429/502/503/504 标记可重试；400/403/409/422 默认不自动重试。
 _RETRYABLE_HTTP_STATUS = frozenset({429, 502, 503, 504})
@@ -158,21 +163,32 @@ class DsaLoopClient:
         """
         with self._client() as client:
             try:
-                response = client.request(method, path, json=body, headers=headers, params=params)
+                stream = getattr(client, "stream", None)
+                if callable(stream):
+                    with stream(method, path, json=body, headers=headers, params=params) as response:
+                        response_body = self._read_response_body(response)
+                        http_status = response.status_code
+                        response_is_error = response.is_error
+                else:
+                    # Backward-compatible seam for small in-memory unit fakes.
+                    # Production httpx.Client always takes the streaming path.
+                    response = client.request(method, path, json=body, headers=headers, params=params)
+                    response_body = self._read_buffered_response_body(response)
+                    http_status = response.status_code
+                    response_is_error = response.is_error
+            except httpx.RemoteProtocolError as exc:
+                raise DsaProtocolError("dsa_response_incomplete_or_invalid_http") from exc
             except httpx.RequestError as exc:
                 raise DsaUnavailableError(f"dsa_research_loop_unavailable: {exc}") from exc
 
-        if len(response.content) > _MAX_RESPONSE_BYTES:
-            raise DsaProtocolError("dsa_response_too_large")
         try:
-            payload: Any = response.json()
+            payload: Any = json.loads(response_body)
         except ValueError as exc:
             raise DsaProtocolError("dsa_response_not_json") from exc
         if not isinstance(payload, dict):
             raise DsaProtocolError("dsa_response_not_object")
 
-        http_status = response.status_code
-        if response.is_error:
+        if response_is_error:
             error = payload.get("error", payload)
             return {
                 "status": "error",
@@ -189,6 +205,105 @@ class DsaLoopClient:
             "retryable": False,
             "data": payload.get("data", payload),
         }
+
+    @staticmethod
+    def _raw_header_values(response: httpx.Response, name: bytes) -> list[str]:
+        return [
+            value.decode("latin-1").strip()
+            for key, value in response.headers.raw
+            if key.lower() == name
+        ]
+
+    @classmethod
+    def _response_framing(cls, response: httpx.Response) -> tuple[int | None, str]:
+        content_lengths = cls._raw_header_values(response, b"content-length")
+        if len(content_lengths) > 1:
+            raise DsaProtocolError("dsa_response_multiple_content_length")
+        declared_length: int | None = None
+        if content_lengths:
+            raw_length = content_lengths[0]
+            if not raw_length.isascii() or not raw_length.isdigit():
+                raise DsaProtocolError("dsa_response_invalid_content_length")
+            declared_length = int(raw_length)
+            if declared_length > _MAX_RESPONSE_BYTES:
+                raise DsaProtocolError("dsa_response_too_large")
+
+        transfer_encodings = cls._raw_header_values(response, b"transfer-encoding")
+        if declared_length is not None and transfer_encodings:
+            raise DsaProtocolError("dsa_response_ambiguous_framing")
+
+        content_encodings = cls._raw_header_values(response, b"content-encoding")
+        if len(content_encodings) > 1:
+            raise DsaProtocolError("dsa_response_multiple_content_encoding")
+        encoding = content_encodings[0].lower() if content_encodings else "identity"
+        if "," in encoding or encoding not in _ALLOWED_CONTENT_ENCODINGS:
+            raise DsaProtocolError("dsa_response_unsupported_content_encoding")
+        return declared_length, encoding
+
+    @classmethod
+    def _decode_bounded_chunks(
+        cls,
+        chunks: Any,
+        *,
+        declared_length: int | None,
+        encoding: str,
+    ) -> bytes:
+        body = bytearray()
+        wire_bytes = 0
+        decoder = zlib.decompressobj(16 + zlib.MAX_WBITS) if encoding == "gzip" else None
+        try:
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                wire_bytes += len(chunk)
+                if wire_bytes > _MAX_RESPONSE_BYTES:
+                    raise DsaProtocolError("dsa_response_too_large")
+                if declared_length is not None and wire_bytes > declared_length:
+                    raise DsaProtocolError("dsa_response_content_length_mismatch")
+
+                if decoder is None:
+                    if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
+                        raise DsaProtocolError("dsa_response_too_large")
+                    body.extend(chunk)
+                    continue
+
+                remaining = _MAX_RESPONSE_BYTES - len(body)
+                decoded = decoder.decompress(chunk, remaining + 1)
+                if len(decoded) > remaining or decoder.unconsumed_tail:
+                    raise DsaProtocolError("dsa_response_too_large")
+                body.extend(decoded)
+
+            if declared_length is not None and wire_bytes != declared_length:
+                raise DsaProtocolError("dsa_response_content_length_mismatch")
+            if decoder is not None:
+                remaining = _MAX_RESPONSE_BYTES - len(body)
+                tail = decoder.flush(remaining + 1)
+                if len(tail) > remaining:
+                    raise DsaProtocolError("dsa_response_too_large")
+                body.extend(tail)
+                if not decoder.eof or decoder.unused_data:
+                    raise DsaProtocolError("dsa_response_invalid_gzip")
+        except zlib.error as exc:
+            raise DsaProtocolError("dsa_response_invalid_gzip") from exc
+        return bytes(body)
+
+    @classmethod
+    def _read_response_body(cls, response: httpx.Response) -> bytes:
+        declared_length, encoding = cls._response_framing(response)
+        return cls._decode_bounded_chunks(
+            response.iter_raw(),
+            declared_length=declared_length,
+            encoding=encoding,
+        )
+
+    @classmethod
+    def _read_buffered_response_body(cls, response: httpx.Response) -> bytes:
+        declared_length, encoding = cls._response_framing(response)
+        return cls._decode_bounded_chunks(
+            (response.content,),
+            declared_length=declared_length,
+            encoding=encoding,
+        )
 
     def _post(
         self,
@@ -319,6 +434,18 @@ class DsaLoopClient:
         params = {"after_sequence": int(after_sequence), "page_size": max(1, min(int(page_size), 200))}
         return self.request("poll_research_events", "GET", f"{HTTP_PREFIX}/experiments/{exp_id}/events", params=params)
 
+    def get_experiment_state_snapshot(
+        self, experiment_id: str, snapshot_id: str
+    ) -> dict[str, Any]:
+        """Fetch one immutable recovery snapshot referenced by a 410 response."""
+        exp_id = validate_resource_id(experiment_id, name="experiment_id")
+        state_id = validate_resource_id(snapshot_id, name="state_snapshot_id")
+        return self.request(
+            "get_experiment_state_snapshot",
+            "GET",
+            f"{HTTP_PREFIX}/experiments/{exp_id}/state-snapshots/{state_id}",
+        )
+
     def get_error(self, error_id: str) -> dict[str, Any]:
         err_id = validate_resource_id(error_id, name="error_id")
         return self.request("get_research_error", "GET", f"{HTTP_PREFIX}/errors/{err_id}")
@@ -404,6 +531,14 @@ class DsaLoopClient:
             idempotency_key=self._idempotency_key(f"panel_{snap_id}_{digest}", prefix="panel"),
         )
 
+    def get_market_panel(self, panel_id: str) -> dict[str, Any]:
+        value = validate_resource_id(panel_id, name="panel_id")
+        return self.request("get_market_panel", "GET", f"{HTTP_PREFIX}/market-panels/{value}")
+
+    def get_artifact_metadata(self, artifact_id: str) -> dict[str, Any]:
+        value = validate_resource_id(artifact_id, name="artifact_id")
+        return self.request("get_artifact_metadata", "GET", f"{HTTP_PREFIX}/artifacts/{value}/metadata")
+
     def create_artifact_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post(
             "create_artifact_upload",
@@ -411,6 +546,135 @@ class DsaLoopClient:
             payload,
             idempotency_key=f"upload_{uuid.uuid4().hex[:16]}",
         )
+
+    def upload_artifact_content(self, upload_id: str, source_path: Path) -> dict[str, Any]:
+        """Stream an artifact PUT with the exact fixed Content-Length contract."""
+        up_id = validate_resource_id(upload_id, name="upload_id")
+        source = Path(source_path)
+        size = source.stat().st_size
+        if size > _MAX_ARTIFACT_BYTES:
+            raise DsaProtocolError("artifact_upload_too_large")
+        headers = {
+            "Idempotency-Key": self._idempotency_key(f"content_{up_id}", prefix="content"),
+            "Content-Length": str(size),
+            "Content-Encoding": "identity",
+            "Content-Type": "application/octet-stream",
+        }
+
+        def chunks() -> Any:
+            with source.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        return
+                    yield chunk
+
+        with self._client() as client:
+            try:
+                with client.stream(
+                    "PUT",
+                    f"{HTTP_PREFIX}/artifact-uploads/{up_id}/content",
+                    headers=headers,
+                    content=chunks(),
+                ) as response:
+                    response_body = self._read_response_body(response)
+                    status = response.status_code
+                    is_error = response.is_error
+            except httpx.RemoteProtocolError as exc:
+                raise DsaProtocolError("dsa_response_incomplete_or_invalid_http") from exc
+            except httpx.RequestError as exc:
+                raise DsaUnavailableError(f"dsa_research_loop_unavailable: {exc}") from exc
+        return self._normalize_json_envelope("upload_artifact_content", status, is_error, response_body)
+
+    def download_artifact(
+        self,
+        artifact_id: str,
+        destination: Path,
+        *,
+        expected_size_bytes: int | None = None,
+        expected_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Download a large immutable artifact into a bounded atomic file."""
+        value = validate_resource_id(artifact_id, name="artifact_id")
+        metadata_result = self.get_artifact_metadata(value)
+        if metadata_result.get("status") != "ok":
+            return metadata_result
+        metadata = metadata_result.get("data") or {}
+        expected_size = int(
+            metadata.get("size_bytes") if expected_size_bytes is None else expected_size_bytes
+        )
+        expected_hash = str(metadata.get("sha256") if expected_sha256 is None else expected_sha256)
+        if expected_size < 0 or expected_size > _MAX_ARTIFACT_BYTES:
+            raise DsaProtocolError("artifact_download_too_large")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise DsaProtocolError("artifact_download_invalid_sha256")
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+        digest = hashlib.sha256()
+        received = 0
+        try:
+            with self._client() as client:
+                try:
+                    with client.stream(
+                        "GET",
+                        f"{HTTP_PREFIX}/artifacts/{value}/content",
+                        headers={"Accept-Encoding": "identity"},
+                    ) as response:
+                        if response.is_error:
+                            body = self._read_response_body(response)
+                            return self._normalize_json_envelope(
+                                "download_artifact", response.status_code, True, body
+                            )
+                        content_lengths = self._raw_header_values(response, b"content-length")
+                        if len(content_lengths) != 1 or not content_lengths[0].isdigit():
+                            raise DsaProtocolError("artifact_download_invalid_content_length")
+                        declared = int(content_lengths[0])
+                        transfer_encodings = self._raw_header_values(response, b"transfer-encoding")
+                        if transfer_encodings:
+                            raise DsaProtocolError("artifact_download_transfer_encoding_forbidden")
+                        content_encodings = self._raw_header_values(response, b"content-encoding")
+                        if len(content_encodings) > 1:
+                            raise DsaProtocolError("artifact_download_content_encoding_forbidden")
+                        encoding = content_encodings[0].lower() if content_encodings else "identity"
+                        if encoding != "identity":
+                            raise DsaProtocolError("artifact_download_content_encoding_forbidden")
+                        if declared is None or declared != expected_size:
+                            raise DsaProtocolError("artifact_download_content_length_mismatch")
+                        with partial.open("xb") as handle:
+                            for chunk in response.iter_raw():
+                                if not chunk:
+                                    continue
+                                received += len(chunk)
+                                if received > expected_size or received > _MAX_ARTIFACT_BYTES:
+                                    raise DsaProtocolError("artifact_download_too_large")
+                                handle.write(chunk)
+                                digest.update(chunk)
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                except httpx.RemoteProtocolError as exc:
+                    raise DsaProtocolError("artifact_download_incomplete_http") from exc
+                except httpx.RequestError as exc:
+                    raise DsaUnavailableError(f"dsa_research_loop_unavailable: {exc}") from exc
+            if received != expected_size:
+                raise DsaProtocolError("artifact_download_content_length_mismatch")
+            if digest.hexdigest() != expected_hash:
+                raise DsaProtocolError("artifact_download_sha256_mismatch")
+            os.replace(partial, target)
+            return {
+                "status": "ok",
+                "action": "download_artifact",
+                "http_status": 200,
+                "retryable": False,
+                "data": {
+                    "artifact_id": value,
+                    "size_bytes": received,
+                    "sha256": expected_hash,
+                    "path": str(target),
+                },
+            }
+        finally:
+            partial.unlink(missing_ok=True)
 
     def complete_artifact_upload(self, upload_id: str) -> dict[str, Any]:
         up_id = validate_resource_id(upload_id, name="upload_id")
@@ -422,7 +686,8 @@ class DsaLoopClient:
         )
 
     def register_factor_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
-        snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex[:16]
+        manifest = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else payload
+        snapshot_id = manifest.get("snapshot_id") or uuid.uuid4().hex[:16]
         return self._post(
             "register_factor_snapshot",
             f"{HTTP_PREFIX}/factor-snapshots",
@@ -433,6 +698,33 @@ class DsaLoopClient:
     def get_factor_snapshot(self, factor_snapshot_id: str) -> dict[str, Any]:
         snap_id = validate_resource_id(factor_snapshot_id, name="factor_snapshot_id")
         return self.request("get_factor_snapshot", "GET", f"{HTTP_PREFIX}/factor-snapshots/{snap_id}")
+
+    @staticmethod
+    def _normalize_json_envelope(
+        action: str, http_status: int, response_is_error: bool, response_body: bytes
+    ) -> dict[str, Any]:
+        try:
+            payload = json.loads(response_body)
+        except ValueError as exc:
+            raise DsaProtocolError("dsa_response_not_json") from exc
+        if not isinstance(payload, dict):
+            raise DsaProtocolError("dsa_response_not_object")
+        if response_is_error:
+            return {
+                "status": "error",
+                "action": action,
+                "http_status": http_status,
+                "retryable": http_status_retryable(http_status),
+                "error": payload.get("error", payload),
+                "data": None,
+            }
+        return {
+            "status": "ok",
+            "action": action,
+            "http_status": http_status,
+            "retryable": False,
+            "data": payload.get("data", payload),
+        }
 
 
 def serialize_json(value: Any) -> str:

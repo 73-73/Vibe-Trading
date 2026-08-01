@@ -418,8 +418,8 @@ def test_cursor_expired_blocks_campaign(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_cursor_expired_recovery_continues_when_local_state_sufficient(tmp_path: Path) -> None:
-    """波次 C：410 时本地已落库状态足够 → 不 blocked，尽力本地恢复并继续。"""
+def test_cursor_expired_without_snapshot_blocks_even_when_local_state_looks_terminal(tmp_path: Path) -> None:
+    """Local guesses cannot replace the authoritative §11.9 snapshot."""
     server = MockDsaServer("cursor_expired")
     server.start()
     try:
@@ -442,7 +442,8 @@ def test_cursor_expired_recovery_continues_when_local_state_sufficient(tmp_path:
         store.set_campaign_cursor(campaign_id, exp_id, 100)
         ctrl.run_pipeline_once(campaign_id)
         campaign = ctrl.get_campaign(campaign_id)
-        assert campaign["status"] != "blocked", "本地状态足够时应尽力恢复并继续而非 blocked"
+        assert campaign["status"] == "blocked"
+        assert "state_snapshot_id" in campaign["blocked_reason"]
     finally:
         server.stop()
 
@@ -747,7 +748,7 @@ def test_data_snapshot_build_incomplete_stays_wait_data(tmp_path: Path) -> None:
     store = CampaignStore(db_path=tmp_path / "c.db")
     ctrl = make_controller(store, "http://127.0.0.1:1")
     campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
-    store.update_campaign(campaign_id, status="running")
+    store.update_campaign(campaign_id, status="running", current_stage="WAIT_DATA")
     store.upsert_execution(
         {
             "execution_id": "exec_snap_pending_001",

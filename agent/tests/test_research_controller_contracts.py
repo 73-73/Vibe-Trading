@@ -25,7 +25,7 @@ _GENERATED_DIR = _CONTRACTS_DIR / "generated"
 # DSA contract_bundle.v1 的期望 bundle_sha256（漂移手动触发基准，R11）。
 # 每次从 DSA 同步 bundle 副本（bundle_manifest.json + golden/ + schemas/）后，
 # 必须同步更新此常量；可用环境变量 DSA_EXPECTED_BUNDLE_SHA256 覆盖。
-_PINNED_DSA_BUNDLE_SHA256 = "ab0dae3812331dd147c77e830e35a08ac42deb288c6955f443509f29b062340d"
+_PINNED_DSA_BUNDLE_SHA256 = "3023bb2f326c89cf9913baadace2311a8e4090d37284a4c4f1c9947abe502e24"
 
 # golden fixture 文件名 -> 生成的客户端模型模块/类名
 GOLDEN_TO_MODEL = {

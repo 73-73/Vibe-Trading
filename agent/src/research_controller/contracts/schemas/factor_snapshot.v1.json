@@ -41,6 +41,13 @@
       "title": "Formula Versions",
       "type": "object"
     },
+    "source_versions": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Source Versions",
+      "type": "object"
+    },
     "columns": {
       "items": {
         "type": "string"

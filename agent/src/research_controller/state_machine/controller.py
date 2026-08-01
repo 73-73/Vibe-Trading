@@ -30,8 +30,11 @@ from src.research_controller.client.dsa_client import (
     DsaUnavailableError,
     sha256_hex,
 )
-from src.research_controller.contracts import source_bundle_sha256
+from src.research_controller.contracts import source_bundle_sha256, verify_local_copy
 from src.research_controller.contracts.generated.campaign_create_request_v1 import CampaignCreateRequest
+from src.research_controller.contracts.generated.experiment_state_snapshot_v1 import (
+    ExperimentStateSnapshot,
+)
 from src.research_controller.repair.lineage import (
     can_repair,
     next_candidate_version,
@@ -49,7 +52,7 @@ from src.research_controller.state_machine.machine import (
     TERMINAL_EXPERIMENT_PHASES,
     compute_poll_interval,
 )
-from src.research_controller.store.campaign_store import CampaignStore
+from src.research_controller.store.campaign_store import CampaignStore, IdempotencyConflictError
 from src.research_controller.store.canonical import canonical_sha256
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,49 @@ GATE_CHAMPION_V1 = "gate_champion_v1"
 STRATEGY_CONTRACT_V1 = "strategy-signal.v1"
 FACTOR_TARGET = 357
 DEFAULT_MOCK_DATA_SNAPSHOT_ID = "data_dev_001"
+
+# §6.1 / §17.2 / §20: a Campaign may start only when the peer explicitly
+# advertises the complete first-phase judge surface.  ``status=ok`` alone is
+# transport health, not execution readiness.
+REQUIRED_EXECUTION_TYPES = (
+    "data_snapshot_build",
+    "market_panel_export",
+    "factor_snapshot_validate",
+    "factor_smoke",
+    "factor_screen",
+    "strategy_static_validate",
+    "strategy_sandbox_smoke",
+    "portfolio_backtest",
+    "robustness",
+    "gate_challenger",
+)
+REQUIRED_CAPABILITY_VERSIONS = {
+    "protocol_versions": "research-loop.v1",
+    "strategy_contracts": STRATEGY_CONTRACT_V1,
+    "research_sdk_versions": "research_sdk.v1",
+    "data_snapshot_versions": "data_snapshot.v1",
+    "universe_snapshot_versions": "universe_snapshot.v1",
+    "market_panel_versions": "market_panel.v1",
+    "factor_snapshot_versions": "factor_snapshot.v1",
+    "evidence_bundle_versions": "evidence_bundle.v1",
+    "review_report_versions": "review_report.v1",
+}
+DEFAULT_REQUIRED_PREFLIGHT_COMPONENTS = ("sandbox", "reviewer", "data", "universe")
+REQUIRED_ARTIFACT_UPLOAD_SCHEMA = "artifact_upload_capabilities.v1"
+REQUIRED_ARTIFACT_UPLOADS = {
+    "factor_values": "application/vnd.apache.parquet",
+}
+MAX_CANCELLATION_PROTOCOL_ERRORS = 3
+
+
+def _state_snapshot_semantic_hash(snapshot: dict[str, Any]) -> str:
+    """Hash only the recoverable state, excluding transport metadata."""
+    semantic = {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"state_sha256", "created_at"}
+    }
+    return canonical_sha256(semantic)
 
 # R09 决策 B（§9.3）：Reviewer 意见是旁路参考，等待超时后允许决策但必须标记缺少独立评审。
 REVIEW_BYPASS_MARKER = "缺少 DSA 独立评审"
@@ -196,6 +242,8 @@ class ResearchCampaignController:
         max_repair_versions: int = MAX_REPAIR_VERSIONS_PER_CANDIDATE,
         max_consecutive_fingerprint: int = 2,
         review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+        capabilities_provider: Callable[[], dict[str, Any]] | None = None,
+        require_longbridge: bool = False,
     ) -> None:
         self.store = store
         self.dsa = dsa_client
@@ -207,6 +255,13 @@ class ResearchCampaignController:
         self.max_repair_versions = int(max_repair_versions)
         self.max_consecutive_fingerprint = int(max_consecutive_fingerprint)
         self.review_timeout_seconds = float(review_timeout_seconds)
+        # Test seam only.  Production assembly does not inject this and always
+        # consumes the live DSA capabilities endpoint.
+        self.capabilities_provider = capabilities_provider or self.dsa.get_capabilities
+        self.require_longbridge = bool(require_longbridge)
+        # 进程内启动门：每个 controller 实例必须至少复验一次既有 running
+        # Campaign，不能信任旧数据库中缺失/过期的 preflight 记录。
+        self._startup_preflight_verified: set[str] = set()
         self._dsa_unavailable = False
         self._consecutive_failures = 0
 
@@ -224,7 +279,7 @@ class ResearchCampaignController:
             "campaign_id": campaign_id,
             "research_goal_id": _short_id("goal"),
             "status": "initializing",
-            "current_stage": "WAIT_DATA",
+            "current_stage": "PREFLIGHT",
             "config_sha256": canonical_sha256(req.model_dump(mode="json")),
             "protocol_bundle_sha256": source_bundle_sha256(),
             "data_snapshot_id": None,
@@ -235,10 +290,16 @@ class ResearchCampaignController:
             "budget_usage": {"llm_calls_rolling_24h": 0, "candidate_versions_rolling_24h": 0},
             "last_event_sequences": {},
             "config": req.model_dump(mode="json"),
+            "preflight": {},
             "blocked_reason": None,
             "created_at": now,
             "updated_at": now,
         }
+        preflight = self._run_preflight(record, resume_stage="WAIT_DATA")
+        record["preflight"] = preflight
+        if preflight["status"] == "blocked":
+            record["status"] = "blocked"
+            record["blocked_reason"] = self._preflight_reason(preflight["blocking_items"])
         self.store.create_campaign(record)
         logger.info("created research campaign %s", campaign_id)
         return self._create_response(record)
@@ -259,6 +320,10 @@ class ResearchCampaignController:
             "universe_snapshot_id": record.get("universe_snapshot_id"),
             "gate_policy_version": record["gate_policy_version"],
             "factor_inventory": record.get("factor_inventory", {}),
+            "current_stage": record["current_stage"],
+            "preflight": record.get("preflight", {}),
+            "blocking_items": (record.get("preflight") or {}).get("blocking_items", []),
+            "blocked_reason": record.get("blocked_reason"),
             "created_at": record["created_at"],
         }
 
@@ -275,15 +340,16 @@ class ResearchCampaignController:
     def list_active_campaign_ids(self) -> list[str]:
         """Return campaign ids still being driven by the pipeline (§13).
 
-        Only ``initializing`` / ``running`` / ``waiting_budget`` campaigns are
-        polled; ``paused`` / ``cancelled`` / ``blocked`` / ``completed`` are not.
-        Read-only convenience for the pipeline driver; backward compatible.
+        Cancelled campaigns remain discoverable only while a durable remote
+        cancellation intent is pending; this lets the driver finish recovery
+        after a process restart without allowing any new research work.
         """
         rows = self.store.list_campaigns(limit=500)
         return [
             r["campaign_id"]
             for r in rows
             if r["status"] in ("initializing", "running", "waiting_budget")
+            or (r["status"] == "cancelled" and self.store.has_pending_cancellations(r["campaign_id"]))
         ]
 
     def pause_campaign(self, campaign_id: str, *, cancel_running: bool = False) -> dict[str, Any]:
@@ -301,20 +367,71 @@ class ResearchCampaignController:
         campaign = self.store.get_campaign(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(campaign_id)
-        if campaign["status"] != "paused":
-            raise CampaignValidationError("only a paused campaign can be resumed")
-        self.store.update_campaign(campaign_id, status="running", updated_at=_now())
+        preflight_blocked = (
+            campaign["status"] == "blocked"
+            and campaign.get("current_stage") == "PREFLIGHT"
+            and (campaign.get("preflight") or {}).get("status") == "blocked"
+        )
+        if campaign["status"] != "paused" and not preflight_blocked:
+            raise CampaignValidationError("only a paused or preflight-blocked campaign can be resumed")
+        prior_preflight = campaign.get("preflight") or {}
+        resume_stage = (
+            prior_preflight.get("resume_stage")
+            if campaign.get("current_stage") == "PREFLIGHT"
+            else campaign.get("current_stage")
+        ) or "WAIT_DATA"
+        preflight = self._run_preflight(campaign, resume_stage=resume_stage)
+        if preflight["status"] == "blocked":
+            self.store.update_campaign(
+                campaign_id,
+                status="blocked",
+                current_stage="PREFLIGHT",
+                preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                blocked_reason=self._preflight_reason(preflight["blocking_items"]),
+                updated_at=_now(),
+            )
+        else:
+            self.store.update_campaign(
+                campaign_id,
+                status="running",
+                current_stage=resume_stage,
+                preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                blocked_reason=None,
+                updated_at=_now(),
+            )
         return self._campaign_detail(self.store.get_campaign(campaign_id))
 
     def cancel_campaign(self, campaign_id: str) -> dict[str, Any]:
         campaign = self.store.get_campaign(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(campaign_id)
-        if campaign["status"] not in ("completed", "cancelled"):
-            self.store.update_campaign(
-                campaign_id, status="cancelled", current_stage="CANCELLED", updated_at=_now()
-            )
-            self._cancel_running_executions(campaign_id)
+        if campaign["status"] == "completed":
+            return self._campaign_detail(campaign)
+        active_ids = [
+            item["execution_id"]
+            for item in self.store.list_executions(campaign_id)
+            if item["status"] in ("queued", "running", "waiting_review")
+        ]
+        # Campaign stop + every per-execution pending intent are committed
+        # before the first network call.  Repeated cancel is idempotent because
+        # existing intents are never replaced.
+        self.store.begin_campaign_cancellation(
+            campaign_id,
+            active_ids,
+            requested_at=_now(),
+        )
+        self._reconcile_cancellations(campaign_id)
+        return self._campaign_detail(self.store.get_campaign(campaign_id))
+
+    def reconcile_campaign_cancellations(self, campaign_id: str) -> dict[str, Any]:
+        """Explicit operator retry for visible, non-retryable diagnostics."""
+        campaign = self.store.get_campaign(campaign_id)
+        if campaign is None:
+            raise CampaignNotFoundError(campaign_id)
+        if campaign["status"] != "cancelled":
+            raise CampaignValidationError("cancellation reconciliation requires a cancelled campaign")
+        self.store.retry_blocked_cancellations(campaign_id, retried_at=_now())
+        self._reconcile_cancellations(campaign_id)
         return self._campaign_detail(self.store.get_campaign(campaign_id))
 
     def _cancel_running_executions(self, campaign_id: str) -> None:
@@ -399,6 +516,10 @@ class ResearchCampaignController:
         reviews = self.store.list_reviews(campaign_id)
         decisions = self.store.list_decisions(campaign_id)
         report = self.store.get_latest_report(campaign_id)
+        cancellation_intents = self.store.list_cancellation_intents(campaign_id)
+        cancellation_pending = sum(1 for item in cancellation_intents if item["status"] == "pending")
+        cancellation_resolved = sum(1 for item in cancellation_intents if item["status"] == "resolved")
+        cancellation_blocked = sum(1 for item in cancellation_intents if item["status"] == "blocked")
         active_executions = [e for e in executions if e["status"] in ("queued", "running", "waiting_review")]
         return {
             "campaign_id": campaign_id,
@@ -429,6 +550,17 @@ class ResearchCampaignController:
             "review_count": len(reviews),
             "decision_count": len(decisions),
             "latest_report": report,
+            "cancellation": {
+                "pending": cancellation_pending,
+                "resolved": cancellation_resolved,
+                "blocked": cancellation_blocked,
+                "unresolved": cancellation_pending + cancellation_blocked,
+                "complete": cancellation_pending == 0 and cancellation_blocked == 0,
+                "requires_operator": cancellation_blocked > 0,
+                "items": cancellation_intents,
+            },
+            "preflight": campaign.get("preflight", {}),
+            "blocking_items": (campaign.get("preflight") or {}).get("blocking_items", []),
             "blocked_reason": campaign.get("blocked_reason"),
             "created_at": campaign["created_at"],
             "updated_at": campaign["updated_at"],
@@ -447,7 +579,10 @@ class ResearchCampaignController:
         campaign = self.store.get_campaign(campaign_id)
         if campaign is None:
             raise CampaignNotFoundError(campaign_id)
-        if campaign["status"] in ("paused", "cancelled", "blocked", "completed"):
+        if campaign["status"] == "cancelled":
+            self._reconcile_cancellations(campaign_id)
+            return self._summary(campaign_id)
+        if campaign["status"] in ("paused", "blocked", "completed"):
             return self._summary(campaign_id)
         self._reconcile_executions(campaign)
         self._poll_events(campaign)
@@ -462,8 +597,11 @@ class ResearchCampaignController:
         return self._summary(campaign_id)
 
     def reconcile_executions_once(self, campaign_id: str) -> dict[str, Any]:
-        self._require_campaign(campaign_id)
-        self._reconcile_executions(self.store.get_campaign(campaign_id))
+        campaign = self._require_campaign(campaign_id)
+        if campaign["status"] == "cancelled":
+            self._reconcile_cancellations(campaign_id)
+        else:
+            self._reconcile_executions(campaign)
         return self._summary(campaign_id)
 
     def poll_interval_seconds(self, campaign_id: str) -> float:
@@ -489,18 +627,214 @@ class ResearchCampaignController:
         campaign = self.store.get_campaign(campaign_id)
         experiments = self.store.list_experiments(campaign_id) if campaign else []
         terminal = sum(1 for e in experiments if e["phase"] in TERMINAL_EXPERIMENT_PHASES)
+        cancellation_intents = self.store.list_cancellation_intents(campaign_id) if campaign else []
+        cancellations_pending = sum(1 for item in cancellation_intents if item["status"] == "pending")
+        cancellations_blocked = sum(1 for item in cancellation_intents if item["status"] == "blocked")
         return {
             "campaign_id": campaign_id,
             "status": campaign["status"] if campaign else "unknown",
             "current_stage": campaign["current_stage"] if campaign else "",
             "experiments_total": len(experiments),
             "experiments_terminal": terminal,
-            "complete": bool(campaign and campaign["status"] in ("completed", "cancelled")),
+            "cancellations_pending": cancellations_pending,
+            "cancellations_blocked": cancellations_blocked,
+            "cancellations_unresolved": cancellations_pending + cancellations_blocked,
+            "cancellation_requires_operator": cancellations_blocked > 0,
+            "complete": bool(
+                campaign
+                and (
+                    campaign["status"] == "completed"
+                    or (
+                        campaign["status"] == "cancelled"
+                        and not self.store.has_unresolved_cancellations(campaign_id)
+                    )
+                )
+            ),
         }
 
     # ==================================================================
     # 执行对账（§16 恢复）
     # ==================================================================
+
+    @staticmethod
+    def _execution_fields_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for key in (
+            "status",
+            "progress",
+            "current_stage",
+            "error_id",
+            "evidence_id",
+            "started_at",
+            "finished_at",
+        ):
+            value = summary.get(key)
+            if value is not None and value != "":
+                fields[key] = value
+        return fields
+
+    def _resolve_cancellation_terminal(
+        self,
+        execution_id: str,
+        summary: dict[str, Any],
+        *,
+        diagnostic_code: str | None = None,
+        diagnostic_message: str | None = None,
+    ) -> None:
+        remote_status = str(summary.get("status") or "interrupted")
+        fields = self._execution_fields_from_summary(summary)
+        fields["status"] = remote_status
+        if remote_status in ("completed", "failed", "cancelled") and not fields.get("finished_at"):
+            fields["finished_at"] = _now()
+        self.store.resolve_cancellation(
+            execution_id,
+            execution_fields=fields,
+            remote_status=remote_status,
+            resolved_at=_now(),
+            diagnostic_code=diagnostic_code,
+            diagnostic_message=diagnostic_message,
+        )
+
+    def _reconcile_cancellations(self, campaign_id: str) -> None:
+        """Query-before-replay durable cancellation reconciliation (§16)."""
+        terminal_statuses = {"completed", "failed", "cancelled", "interrupted"}
+        for intent in self.store.list_cancellation_intents(campaign_id, status="pending"):
+            execution_id = intent["execution_id"]
+            if self.store.get_execution(execution_id) is None:
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="local_execution_missing",
+                    diagnostic_message="local execution row is missing; cancellation cannot be reconciled",
+                    status="blocked",
+                )
+                continue
+
+            try:
+                result = self.dsa.get_execution(execution_id)
+            except DsaUnavailableError:
+                self._mark_unavailable()
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="execution_query_unavailable",
+                    diagnostic_message="DSA unavailable while querying cancellation outcome",
+                )
+                continue
+            except DsaProtocolError:
+                repeat_count = (
+                    intent["attempt_count"] + 1
+                    if intent.get("diagnostic_code") == "execution_query_protocol_error"
+                    else 1
+                )
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="execution_query_protocol_error",
+                    diagnostic_message="DSA returned an invalid execution query response",
+                    status=(
+                        "blocked"
+                        if repeat_count >= MAX_CANCELLATION_PROTOCOL_ERRORS
+                        else "pending"
+                    ),
+                )
+                continue
+
+            if result.get("status") != "ok":
+                error = result.get("error") or {}
+                code = str(error.get("code") or "execution_query_failed")
+                if code == "execution_not_found":
+                    self._resolve_cancellation_terminal(
+                        execution_id,
+                        {"status": "interrupted", "current_stage": "not_found"},
+                        diagnostic_code=code,
+                        diagnostic_message="DSA execution not found during cancellation reconciliation",
+                    )
+                else:
+                    retryable = bool(result.get("retryable"))
+                    self.store.record_cancellation_attempt(
+                        execution_id,
+                        attempted_at=_now(),
+                        diagnostic_code=code,
+                        diagnostic_message=str(error.get("message") or "execution query failed")[:500],
+                        status="pending" if retryable else "blocked",
+                    )
+                continue
+
+            summary = (result.get("data") or {}).get("execution") or {}
+            remote_status = str(summary.get("status") or "")
+            if remote_status in terminal_statuses:
+                self._resolve_cancellation_terminal(execution_id, summary)
+                continue
+            if remote_status not in ("queued", "running", "waiting_review"):
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="unexpected_remote_execution_status",
+                    diagnostic_message=f"cannot cancel remote execution in status {remote_status or '<missing>'}",
+                    last_remote_status=remote_status or None,
+                    status="blocked",
+                )
+                continue
+
+            try:
+                cancel_result = self.dsa.cancel_execution(execution_id)
+            except DsaUnavailableError:
+                self._mark_unavailable()
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="cancel_transport_outcome_unknown",
+                    diagnostic_message="cancel request transport failed; query before idempotent replay",
+                    last_remote_status=remote_status,
+                )
+                continue
+            except DsaProtocolError:
+                repeat_count = (
+                    intent["attempt_count"] + 1
+                    if intent.get("diagnostic_code") == "cancel_protocol_outcome_unknown"
+                    else 1
+                )
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="cancel_protocol_outcome_unknown",
+                    diagnostic_message="cancel response was invalid; query before idempotent replay",
+                    last_remote_status=remote_status,
+                    status=(
+                        "blocked"
+                        if repeat_count >= MAX_CANCELLATION_PROTOCOL_ERRORS
+                        else "pending"
+                    ),
+                )
+                continue
+
+            if cancel_result.get("status") != "ok":
+                error = cancel_result.get("error") or {}
+                retryable = bool(cancel_result.get("retryable"))
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code=str(error.get("code") or "cancel_failed"),
+                    diagnostic_message=str(error.get("message") or "cancel request failed")[:500],
+                    last_remote_status=remote_status,
+                    status="pending" if retryable else "blocked",
+                )
+                continue
+
+            cancel_data = cancel_result.get("data") or {}
+            cancel_summary = cancel_data.get("execution") or cancel_data
+            cancel_status = str(cancel_summary.get("status") or "")
+            if cancel_status in terminal_statuses:
+                self._resolve_cancellation_terminal(execution_id, cancel_summary)
+            else:
+                self.store.record_cancellation_attempt(
+                    execution_id,
+                    attempted_at=_now(),
+                    diagnostic_code="cancel_acknowledged_pending",
+                    diagnostic_message="cancel accepted but remote execution is not terminal yet",
+                    last_remote_status=cancel_status or remote_status,
+                )
 
     def _reconcile_executions(self, campaign: dict[str, Any]) -> None:
         campaign_id = campaign["campaign_id"]
@@ -516,21 +850,7 @@ class ResearchCampaignController:
                 continue
             if result["status"] == "ok":
                 summary = (result.get("data") or {}).get("execution") or {}
-                fields: dict[str, Any] = {}
-                if summary.get("status"):
-                    fields["status"] = summary["status"]
-                if summary.get("progress") is not None:
-                    fields["progress"] = summary["progress"]
-                if summary.get("current_stage"):
-                    fields["current_stage"] = summary["current_stage"]
-                if summary.get("error_id"):
-                    fields["error_id"] = summary["error_id"]
-                if summary.get("evidence_id"):
-                    fields["evidence_id"] = summary["evidence_id"]
-                if summary.get("started_at"):
-                    fields["started_at"] = summary["started_at"]
-                if summary.get("finished_at"):
-                    fields["finished_at"] = summary["finished_at"]
+                fields = self._execution_fields_from_summary(summary)
                 if fields:
                     self.store.update_execution(exec_record["execution_id"], **fields)
             elif (result.get("error") or {}).get("code") == "execution_not_found":
@@ -565,16 +885,14 @@ class ResearchCampaignController:
                 if result["status"] == "error":
                     error = result.get("error") or {}
                     if error.get("code") == "event_cursor_expired":
-                        # 波次 C：不再仅 _block_campaign，先做尽力本地恢复。
-                        recovered = self._recover_cursor_expired(
-                            campaign, exp_id, error.get("message", "")
-                        )
-                        if not recovered:
-                            return  # 已 blocked
-                        # 尽力恢复成功：重置游标到 0 触发全量重新拉取（已落库事件按
-                        # message_id 去重），避免下次以过期游标再次 410。
-                        self.store.set_campaign_cursor(campaign_id, exp_id, 0)
-                        cursor = 0
+                        restored_through = self._recover_cursor_expired(campaign, exp_id, error)
+                        if restored_through is None:
+                            return
+                        # The snapshot is inclusive through this sequence and
+                        # was applied in the same local transaction as the
+                        # cursor.  Continue strictly after it; never reset
+                        # active work to pending or replay compacted events.
+                        cursor = restored_through
                         continue
                     elif result.get("retryable"):
                         self._mark_unavailable()
@@ -800,7 +1118,7 @@ class ResearchCampaignController:
             "evidence_id": evidence["evidence_id"],
             "campaign_id": campaign["campaign_id"],
             "experiment_id": exp_id,
-            "execution_id": exec_id,
+            "execution_id": exec_id or evidence.get("execution_id") or "",
             "evidence": evidence,
             "created_at": _now(),
         }
@@ -811,44 +1129,500 @@ class ResearchCampaignController:
             campaign["campaign_id"], status="blocked", blocked_reason=reason, updated_at=_now()
         )
 
-    def _recover_cursor_expired(self, campaign: dict[str, Any], exp_id: str, message: str) -> bool:
-        """410 ``event_cursor_expired`` 的尽力本地恢复（波次 C）。
+    @staticmethod
+    def _preflight_reason(blocking_items: list[dict[str, Any]]) -> str:
+        if not blocking_items:
+            return "Campaign preflight blocked"
+        return "Campaign preflight blocked: " + "; ".join(
+            f"{item.get('code', 'preflight_failed')} ({item.get('message', '')})"
+            for item in blocking_items
+        )
 
-        DSA 侧 ``experiment_state_snapshot.v1``（§11.9）恢复资源未实现，
-        ``state_snapshot_id`` 恒为 None，无法从 DSA 全量恢复。这里从本地 store
-        已落库 events（executions/evidence/reviews 已随事件同步）重建该实验的
-        latest 状态：
+    @staticmethod
+    def _component_ready(value: Any) -> bool:
+        """Accept only an explicit all-green readiness declaration.
 
-        - 若该实验没有未终态 execution（queued/running/waiting_review），说明
-          已落库事件足以支撑继续推进（决策 / 完成），返回 True；
-        - 否则存在依赖 DSA 事件才能推进的 in-flight 执行，返回 False 并
-          blocked，blocked_reason 如实标注“游标过期且 DSA 无 state snapshot
-          恢复资源（§11.9 未实现）”。
+        DSA's current contract uses ``status``, ``available`` and ``ready``.
+        Requiring all three prevents an older or partially wired service from
+        being promoted merely because one optimistic boolean was present.
+        """
+        if not isinstance(value, dict):
+            return False
+        return (
+            value.get("status") == "ready"
+            and value.get("available") is True
+            and value.get("ready") is True
+        )
 
-        ``last_event_sequences`` 已停在最新已处理 sequence；调用方视返回决定
-        重置游标做全量重新拉取。
+    @staticmethod
+    def _longbridge_required(config: dict[str, Any]) -> bool:
+        """Future-compatible opt-in without inferring it from CN research.
+
+        The frozen campaign schema currently has no provider requirement field;
+        assembly may set ``require_longbridge`` explicitly.  These keys allow a
+        future compatible schema extension without weakening today's default.
+        """
+        requirements = config.get("requirements") or {}
+        providers = config.get("providers") or {}
+        automation = config.get("automation") or {}
+        return bool(
+            requirements.get("longbridge")
+            or providers.get("longbridge") in (True, "required", "real")
+            or automation.get("forward_observation")
+        )
+
+    def _run_preflight(
+        self,
+        campaign: dict[str, Any],
+        *,
+        resume_stage: str,
+    ) -> dict[str, Any]:
+        """Evaluate the complete §17.2 gate without executing candidate code."""
+        checked_at = _now()
+        local_bundle = source_bundle_sha256()
+        config = campaign.get("config") or {}
+        required_components = list(DEFAULT_REQUIRED_PREFLIGHT_COMPONENTS)
+        if self.require_longbridge or self._longbridge_required(config):
+            required_components.append("longbridge")
+        blocking_items: list[dict[str, Any]] = []
+        checks: list[dict[str, Any]] = []
+
+        def _add_blocker(
+            code: str,
+            component: str,
+            message: str,
+            *,
+            expected: Any = None,
+            actual: Any = None,
+        ) -> None:
+            item: dict[str, Any] = {
+                "code": code,
+                "component": component,
+                "message": message,
+            }
+            if expected is not None:
+                item["expected"] = expected
+            if actual is not None:
+                item["actual"] = actual
+            blocking_items.append(item)
+
+        local_copy_problems = verify_local_copy()
+        if local_copy_problems:
+            _add_blocker(
+                "local_contract_bundle_invalid",
+                "contract_bundle",
+                "VIBE contract bundle copy failed local hash verification",
+                actual=local_copy_problems,
+            )
+        else:
+            checks.append({"component": "local_contract_bundle", "status": "passed"})
+
+        try:
+            result = self.capabilities_provider()
+        except (DsaUnavailableError, DsaProtocolError) as exc:
+            self._mark_unavailable()
+            _add_blocker(
+                "dsa_capabilities_unavailable",
+                "dsa",
+                type(exc).__name__,
+            )
+            return {
+                "schema_version": "campaign_preflight.v1",
+                "status": "blocked",
+                "checked_at": checked_at,
+                "resume_stage": resume_stage,
+                "local_contract_bundle_sha256": local_bundle,
+                "peer_contract_bundle_sha256": None,
+                "required_execution_types": list(REQUIRED_EXECUTION_TYPES),
+                "advertised_execution_types": [],
+                "artifact_uploads": {},
+                "required_components": required_components,
+                "checks": checks,
+                "blocking_items": blocking_items,
+            }
+        except Exception as exc:  # noqa: BLE001 - preflight must fail closed
+            logger.exception("unexpected Campaign capabilities preflight failure")
+            _add_blocker(
+                "dsa_capabilities_internal_error",
+                "dsa",
+                f"capabilities preflight raised {type(exc).__name__}",
+            )
+            return {
+                "schema_version": "campaign_preflight.v1",
+                "status": "blocked",
+                "checked_at": checked_at,
+                "resume_stage": resume_stage,
+                "local_contract_bundle_sha256": local_bundle,
+                "peer_contract_bundle_sha256": None,
+                "required_execution_types": list(REQUIRED_EXECUTION_TYPES),
+                "advertised_execution_types": [],
+                "artifact_uploads": {},
+                "required_components": required_components,
+                "checks": checks,
+                "blocking_items": blocking_items,
+            }
+
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            error = result.get("error") if isinstance(result, dict) else None
+            error_code = error.get("code") if isinstance(error, dict) else None
+            _add_blocker(
+                "dsa_capabilities_failed",
+                "dsa",
+                "DSA capabilities request did not return status=ok",
+                actual=error_code or "invalid_response",
+            )
+            caps: dict[str, Any] = {}
+        else:
+            caps_value = result.get("data")
+            caps = caps_value if isinstance(caps_value, dict) else {}
+            if not caps:
+                _add_blocker(
+                    "dsa_capabilities_malformed",
+                    "dsa",
+                    "DSA capabilities payload must be a non-empty object",
+                )
+
+        peer_bundle = caps.get("contract_bundle_sha256")
+        if not isinstance(peer_bundle, str) or len(peer_bundle) != 64:
+            _add_blocker(
+                "contract_bundle_hash_missing",
+                "contract_bundle",
+                "DSA must advertise a verifiable contract_bundle_sha256",
+                expected=local_bundle,
+                actual=peer_bundle,
+            )
+        elif peer_bundle != local_bundle:
+            _add_blocker(
+                "contract_bundle_hash_mismatch",
+                "contract_bundle",
+                "VIBE and DSA contract bundle hashes differ",
+                expected=local_bundle,
+                actual=peer_bundle,
+            )
+        else:
+            checks.append({"component": "peer_contract_bundle", "status": "passed"})
+
+        for field, required_value in REQUIRED_CAPABILITY_VERSIONS.items():
+            advertised = caps.get(field)
+            if not isinstance(advertised, list) or required_value not in advertised:
+                _add_blocker(
+                    f"missing_{field}",
+                    field,
+                    f"required capability {required_value} is not advertised",
+                    expected=required_value,
+                    actual=advertised,
+                )
+            else:
+                checks.append({"component": field, "status": "passed"})
+
+        for field, required_value in (
+            ("markets", config.get("market", "CN")),
+            ("frequencies", config.get("frequency", "1d")),
+        ):
+            advertised = caps.get(field)
+            if not isinstance(advertised, list) or required_value not in advertised:
+                _add_blocker(
+                    f"unsupported_{field[:-1]}",
+                    field,
+                    f"campaign {field[:-1]} is not supported by DSA",
+                    expected=required_value,
+                    actual=advertised,
+                )
+            else:
+                checks.append({"component": field, "status": "passed"})
+
+        raw_execution_types = caps.get("execution_types")
+        advertised_execution_types = sorted(
+            {
+                str(getattr(item, "value", item))
+                for item in raw_execution_types
+            }
+        ) if isinstance(raw_execution_types, list) else []
+        missing_execution_types = [
+            item for item in REQUIRED_EXECUTION_TYPES if item not in advertised_execution_types
+        ]
+        if missing_execution_types:
+            _add_blocker(
+                "missing_execution_types",
+                "execution_types",
+                "DSA does not expose every required deterministic judge execution",
+                expected=list(REQUIRED_EXECUTION_TYPES),
+                actual=advertised_execution_types,
+            )
+        else:
+            checks.append({"component": "execution_types", "status": "passed"})
+
+        artifact_uploads = caps.get("artifact_uploads")
+        artifact_uploads = artifact_uploads if isinstance(artifact_uploads, dict) else {}
+        artifact_schema = artifact_uploads.get("schema_version")
+        artifact_allowlist = artifact_uploads.get("allowlist")
+        artifact_allowlist = artifact_allowlist if isinstance(artifact_allowlist, dict) else {}
+        if artifact_schema != REQUIRED_ARTIFACT_UPLOAD_SCHEMA:
+            _add_blocker(
+                "artifact_upload_capabilities_missing",
+                "artifact_uploads",
+                "DSA must advertise a versioned artifact kind/media-type allowlist",
+                expected=REQUIRED_ARTIFACT_UPLOAD_SCHEMA,
+                actual=artifact_schema,
+            )
+        else:
+            checks.append({"component": "artifact_upload_schema", "status": "passed"})
+        for artifact_kind, required_media_type in REQUIRED_ARTIFACT_UPLOADS.items():
+            allowed_media_types = artifact_allowlist.get(artifact_kind)
+            if (
+                not isinstance(allowed_media_types, list)
+                or required_media_type not in allowed_media_types
+            ):
+                _add_blocker(
+                    "artifact_upload_media_type_not_allowed",
+                    "artifact_uploads",
+                    "required artifact kind/media-type combination is not advertised",
+                    expected={"kind": artifact_kind, "media_type": required_media_type},
+                    actual=allowed_media_types,
+                )
+            else:
+                checks.append(
+                    {
+                        "component": f"artifact_upload:{artifact_kind}",
+                        "status": "passed",
+                        "media_type": required_media_type,
+                    }
+                )
+
+        readiness = caps.get("readiness")
+        readiness = readiness if isinstance(readiness, dict) else {}
+        for component in required_components:
+            component_state = readiness.get(component)
+            if not self._component_ready(component_state):
+                reason = component_state.get("reason") if isinstance(component_state, dict) else None
+                public_state = (
+                    {
+                        "status": component_state.get("status"),
+                        "available": component_state.get("available"),
+                        "ready": component_state.get("ready"),
+                        "reason": str(reason or "")[:500],
+                    }
+                    if isinstance(component_state, dict)
+                    else None
+                )
+                _add_blocker(
+                    f"{component}_not_ready",
+                    component,
+                    str(reason or f"DSA {component} readiness is missing or not ready")[:500],
+                    expected={"status": "ready", "available": True, "ready": True},
+                    actual=public_state,
+                )
+            else:
+                checks.append({"component": component, "status": "passed"})
+
+        return {
+            "schema_version": "campaign_preflight.v1",
+            "status": "blocked" if blocking_items else "passed",
+            "checked_at": checked_at,
+            "resume_stage": resume_stage,
+            "local_contract_bundle_sha256": local_bundle,
+            "peer_contract_bundle_sha256": peer_bundle,
+            "required_execution_types": list(REQUIRED_EXECUTION_TYPES),
+            "advertised_execution_types": advertised_execution_types,
+            "artifact_uploads": {
+                "schema_version": artifact_schema,
+                "allowlist": artifact_allowlist,
+            },
+            "required_components": required_components,
+            "checks": checks,
+            "blocking_items": blocking_items,
+        }
+
+    def _recover_cursor_expired(
+        self, campaign: dict[str, Any], exp_id: str, error: dict[str, Any]
+    ) -> int | None:
+        """Restore a 410 cursor from DSA's immutable state snapshot (§11.9).
+
+        Recovery is deliberately fail closed: the referenced snapshot must be
+        available, schema-valid, bound to this experiment, semantically hashed,
+        and consistent with the immutable local candidate/decision lineage.
+        Authoritative DSA execution summaries plus referenced error/evidence/
+        review objects are then persisted atomically with the inclusive event
+        cursor.  Active executions keep their remote IDs and statuses; nothing
+        is reset to pending and no execution is resubmitted.
         """
         campaign_id = campaign["campaign_id"]
-        executions = self.store.list_executions(campaign_id, exp_id)
-        active = [e for e in executions if e["status"] in ("queued", "running", "waiting_review")]
-        evidence_ids = [e.get("evidence_id") for e in executions if e.get("evidence_id")]
-        review_ids = [e.get("review_id") for e in executions if e.get("review_id")]
-        if not active:
-            logger.warning(
-                "event cursor expired for %s; DSA state snapshot restore resource unavailable "
-                "（§11.9 未实现），从本地重建 latest 状态（executions=%d evidence=%d reviews=%d）并继续",
-                exp_id,
-                len(executions),
-                len(evidence_ids),
-                len(review_ids),
+        details = error.get("details") or {}
+        snapshot_id = str(details.get("state_snapshot_id") or "")
+        if not snapshot_id:
+            self._block_campaign(
+                campaign,
+                f"event cursor expired for {exp_id}: {error.get('message', '')}; "
+                "DSA did not provide a state_snapshot_id",
             )
-            return True
-        self._block_campaign(
-            campaign,
-            f"event cursor expired for {exp_id}: {message}; "
-            f"DSA state snapshot 恢复资源未实现（§11.9），本地状态不足以继续",
+            return None
+        try:
+            result = self.dsa.get_experiment_state_snapshot(exp_id, snapshot_id)
+        except DsaUnavailableError:
+            self._mark_unavailable()
+            return None
+        except (DsaProtocolError, ValueError) as exc:
+            self._block_campaign(campaign, f"state snapshot protocol error for {exp_id}: {exc}")
+            return None
+        if result.get("status") != "ok":
+            if result.get("retryable"):
+                self._mark_unavailable()
+            else:
+                remote = result.get("error") or {}
+                self._block_campaign(
+                    campaign,
+                    f"state snapshot unavailable for {exp_id}: {remote.get('code', 'unknown_error')}",
+                )
+            return None
+
+        data = result.get("data") or {}
+        raw_snapshot = data.get("state_snapshot") or data.get("snapshot")
+        try:
+            snapshot = ExperimentStateSnapshot.model_validate(raw_snapshot).model_dump(mode="json")
+        except Exception as exc:
+            self._block_campaign(campaign, f"state snapshot schema invalid for {exp_id}: {exc}")
+            return None
+        if snapshot["experiment_id"] != exp_id:
+            self._block_campaign(campaign, "state snapshot experiment_id mismatch")
+            return None
+        expected_hash = _state_snapshot_semantic_hash(snapshot)
+        if snapshot["state_sha256"] != expected_hash:
+            self._block_campaign(campaign, "state snapshot state_sha256 mismatch")
+            return None
+        advertised_hash = details.get("state_snapshot_sha256")
+        if advertised_hash and advertised_hash != snapshot["state_sha256"]:
+            self._block_campaign(campaign, "410 state snapshot hash does not match fetched resource")
+            return None
+        through_sequence = int(snapshot["through_sequence"])
+        earliest = int(details.get("earliest_available_sequence") or 0)
+        if earliest and through_sequence < earliest - 1:
+            self._block_campaign(campaign, "state snapshot does not cover the compacted event interval")
+            return None
+
+        local_candidates = self.store.list_candidates_for_experiment(campaign_id, exp_id)
+        local_versions: dict[str, int] = {}
+        for candidate in local_candidates:
+            candidate_id = candidate["candidate_id"]
+            local_versions[candidate_id] = max(
+                local_versions.get(candidate_id, 0), int(candidate["candidate_version"])
+            )
+        if local_versions != {key: int(value) for key, value in snapshot["latest_candidate_versions"].items()}:
+            self._block_campaign(campaign, "state snapshot candidate lineage does not match local immutable source")
+            return None
+        local_decisions = [
+            item for item in self.store.list_decisions(campaign_id) if item["experiment_id"] == exp_id
+        ]
+        local_latest_decision = local_decisions[-1]["decision_id"] if local_decisions else None
+        if local_latest_decision != snapshot.get("latest_decision_id"):
+            self._block_campaign(campaign, "state snapshot decision lineage mismatch")
+            return None
+
+        local_executions = {
+            item["execution_id"]: item for item in self.store.list_executions(campaign_id, exp_id)
+        }
+        restored_executions: list[dict[str, Any]] = []
+        restored_errors: list[dict[str, Any]] = []
+        restored_evidence: list[dict[str, Any]] = []
+        restored_reviews: list[dict[str, Any]] = []
+        for execution_id in snapshot["current_execution_ids"]:
+            try:
+                execution_result = self.dsa.get_execution(execution_id)
+            except DsaUnavailableError:
+                self._mark_unavailable()
+                return None
+            except DsaProtocolError as exc:
+                self._block_campaign(campaign, f"state snapshot execution query invalid: {exc}")
+                return None
+            if execution_result.get("status") != "ok":
+                self._block_campaign(campaign, f"state snapshot execution missing: {execution_id}")
+                return None
+            summary = (execution_result.get("data") or {}).get("execution") or {}
+            if summary.get("execution_id") != execution_id or summary.get("experiment_id") not in (None, exp_id):
+                self._block_campaign(campaign, f"state snapshot execution identity mismatch: {execution_id}")
+                return None
+            existing = local_executions.get(execution_id) or {}
+            record = {
+                "execution_id": execution_id,
+                "campaign_id": campaign_id,
+                "experiment_id": exp_id,
+                "candidate_id": existing.get("candidate_id"),
+                "candidate_version": existing.get("candidate_version"),
+                "execution_type": summary.get("execution_type") or existing.get("execution_type") or "",
+                "status": summary.get("status") or existing.get("status") or "interrupted",
+                "progress": float(summary.get("progress") or 0.0),
+                "current_stage": summary.get("current_stage"),
+                "error_id": summary.get("error_id"),
+                "evidence_id": summary.get("evidence_id"),
+                "review_id": existing.get("review_id"),
+                "created_at": summary.get("created_at") or existing.get("created_at") or _now(),
+                "started_at": summary.get("started_at"),
+                "finished_at": summary.get("finished_at"),
+            }
+            if not record["execution_type"]:
+                self._block_campaign(campaign, f"state snapshot execution type missing: {execution_id}")
+                return None
+            if record["error_id"]:
+                fetched = self._fetch_error(campaign, exp_id, record["error_id"])
+                if fetched is None:
+                    self._block_campaign(campaign, f"state snapshot error missing: {record['error_id']}")
+                    return None
+                restored_errors.append(fetched)
+            if record["evidence_id"]:
+                fetched = self._fetch_evidence(campaign, exp_id, execution_id, record["evidence_id"])
+                if fetched is None:
+                    self._block_campaign(campaign, f"state snapshot evidence missing: {record['evidence_id']}")
+                    return None
+                restored_evidence.append(fetched)
+            restored_executions.append(record)
+
+        for evidence_id in snapshot["latest_evidence_ids"]:
+            if self.store.get_evidence(evidence_id) is not None or any(
+                item["evidence_id"] == evidence_id for item in restored_evidence
+            ):
+                continue
+            owner = next(
+                (item["execution_id"] for item in local_executions.values() if item.get("evidence_id") == evidence_id),
+                "",
+            )
+            fetched = self._fetch_evidence(campaign, exp_id, owner, evidence_id)
+            if fetched is None:
+                self._block_campaign(campaign, f"state snapshot evidence missing: {evidence_id}")
+                return None
+            restored_evidence.append(fetched)
+        for review_id in snapshot["latest_review_ids"]:
+            if self.store.get_review(review_id) is not None:
+                continue
+            owner = next(
+                (item["execution_id"] for item in local_executions.values() if item.get("review_id") == review_id),
+                None,
+            )
+            fetched = self._fetch_review(campaign, exp_id, owner, review_id)
+            if fetched is None:
+                self._block_campaign(campaign, f"state snapshot review missing: {review_id}")
+                return None
+            restored_reviews.append(fetched)
+
+        try:
+            self.store.restore_experiment_state_snapshot(
+                snapshot_id=snapshot_id,
+                campaign_id=campaign_id,
+                experiment_id=exp_id,
+                snapshot=snapshot,
+                executions=restored_executions,
+                errors=restored_errors,
+                evidence=restored_evidence,
+                reviews=restored_reviews,
+            )
+        except (ValueError, KeyError) as exc:
+            self._block_campaign(campaign, f"state snapshot local apply failed: {exc}")
+            return None
+        logger.warning(
+            "restored experiment %s from state snapshot %s through sequence %d without resubmission",
+            exp_id,
+            snapshot_id,
+            through_sequence,
         )
-        return False
+        return through_sequence
 
     # ==================================================================
     # 主动推进（§13）
@@ -861,6 +1635,26 @@ class ResearchCampaignController:
             return
         if campaign["status"] != "running":
             return
+        if campaign_id not in self._startup_preflight_verified:
+            resume_stage = campaign.get("current_stage") or "WAIT_DATA"
+            preflight = self._run_preflight(campaign, resume_stage=resume_stage)
+            if preflight["status"] != "passed":
+                self.store.update_campaign(
+                    campaign_id,
+                    status="blocked",
+                    current_stage="PREFLIGHT",
+                    preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                    blocked_reason=self._preflight_reason(preflight["blocking_items"]),
+                    updated_at=_now(),
+                )
+                return
+            self.store.update_campaign(
+                campaign_id,
+                preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                blocked_reason=None,
+                updated_at=_now(),
+            )
+            self._startup_preflight_verified.add(campaign_id)
         if not self._budget_ok(campaign):
             self._enter_waiting_budget(campaign)
             return
@@ -878,15 +1672,26 @@ class ResearchCampaignController:
             self._advance_experiment(campaign, exp)
 
     def _start_after_initializing(self, campaign: dict[str, Any]) -> None:
-        try:
-            result = self.dsa.get_capabilities()
-        except (DsaUnavailableError, DsaProtocolError):
-            self._mark_unavailable()
+        preflight = self._run_preflight(campaign, resume_stage="WAIT_DATA")
+        if preflight["status"] == "passed":
+            self.store.update_campaign(
+                campaign["campaign_id"],
+                status="running",
+                current_stage="WAIT_DATA",
+                preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                blocked_reason=None,
+                updated_at=_now(),
+            )
+            self._startup_preflight_verified.add(campaign["campaign_id"])
             return
-        if result["status"] == "ok":
-            self.store.update_campaign(campaign["campaign_id"], status="running", updated_at=_now())
-        else:
-            self._block_campaign(campaign, "DSA capabilities check failed")
+        self.store.update_campaign(
+            campaign["campaign_id"],
+            status="blocked",
+            current_stage="PREFLIGHT",
+            preflight_json=json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+            blocked_reason=self._preflight_reason(preflight["blocking_items"]),
+            updated_at=_now(),
+        )
 
     def _ensure_data_snapshot(self, campaign: dict[str, Any]) -> None:
         """R07：数据快照构建是异步的（202 + execution_id）。
@@ -1363,12 +2168,19 @@ class ResearchCampaignController:
         request_sha = canonical_sha256(payload)
         prior = self.store.idempotency_lookup("start_execution", key)
         if prior is not None:
-            if prior["request_sha256"] == request_sha and prior.get("resource_id"):
-                exec_id = prior["resource_id"]
-                if self.store.get_execution(exec_id) is None:
-                    self._rehydrate_execution(campaign, exp, candidate, exec_type, exec_id)
+            if prior["request_sha256"] == request_sha:
+                if prior.get("resource_id"):
+                    exec_id = prior["resource_id"]
+                    if self.store.get_execution(exec_id) is None:
+                        self._rehydrate_execution(campaign, exp, candidate, exec_type, exec_id)
+                    return
+                self._block_campaign(campaign, f"idempotency record missing resource_id for key={key}")
                 return
-            key = f"{key}_r{uuid.uuid4().hex[:8]}"
+            self._block_campaign(
+                campaign,
+                f"idempotency conflict for start_execution key={key}: request hash changed",
+            )
+            return
         try:
             result = self.dsa.start_execution(exp_id, payload, idempotency_key=key)
         except DsaUnavailableError:
@@ -1384,10 +2196,26 @@ class ResearchCampaignController:
         exec_id = data.get("execution_id")
         if not exec_id:
             return
-        self.store.save_idempotency(
-            "start_execution", key, request_sha, result.get("http_status", 200), json.dumps(data), exec_id
-        )
-        self._upsert_execution_row(campaign, exp, candidate, exec_type, exec_id)
+        try:
+            winner = self.store.save_idempotency(
+                "start_execution",
+                key,
+                request_sha,
+                result.get("http_status", 200),
+                json.dumps(data),
+                exec_id,
+            )
+        except IdempotencyConflictError:
+            self._block_campaign(
+                campaign,
+                f"idempotency conflict for start_execution key={key}: concurrent request hash changed",
+            )
+            return
+        winner_exec_id = winner.get("resource_id")
+        if not winner_exec_id:
+            self._block_campaign(campaign, f"idempotency record missing resource_id for key={key}")
+            return
+        self._upsert_execution_row(campaign, exp, candidate, exec_type, winner_exec_id)
 
     def _rehydrate_execution(
         self, campaign: dict[str, Any], exp: dict[str, Any], candidate: dict[str, Any], exec_type: str, exec_id: str

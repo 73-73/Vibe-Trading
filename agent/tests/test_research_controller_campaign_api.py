@@ -17,7 +17,6 @@ from src.research_controller.campaign_api.routes import (
     get_controller,
     register_research_campaign_routes,
     set_controller,
-    set_controller_factory,
 )
 from src.research_controller.client.dsa_client import DsaLoopClient
 from src.research_controller.state_machine.controller import ResearchCampaignController
@@ -161,6 +160,10 @@ def test_pause_resume_cancel_endpoints(tmp_path: Path, mock: MockDsaServer) -> N
     cancelled = client.post(f"/research-campaigns/{campaign_id}/cancel")
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+
+    reconciled = client.post(f"/research-campaigns/{campaign_id}/cancellations/reconcile")
+    assert reconciled.status_code == 200
+    assert reconciled.json()["cancellation"]["complete"] is True
 
     # 终态不能 resume
     assert client.post(f"/research-campaigns/{campaign_id}/resume").status_code == 409

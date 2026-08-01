@@ -42,6 +42,13 @@
           "title": "Formula Versions",
           "type": "object"
         },
+        "source_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Source Versions",
+          "type": "object"
+        },
         "row_count": {
           "minimum": 0,
           "title": "Row Count",

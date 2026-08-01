@@ -112,6 +112,12 @@ def make_controller(
     from src.research_controller.state_machine.controller import ResearchCampaignController
 
     client = DsaLoopClient(base_url=base_url, timeout=30.0)
+    # The DSA protocol mock intentionally does not claim production runtime
+    # readiness.  Existing controller state-machine tests inject an explicit
+    # all-green capability document so they remain scoped to transitions; the
+    # production assembly never uses this seam.  Dedicated preflight tests
+    # exercise missing/degraded fields fail-closed.
+    kwargs.setdefault("capabilities_provider", ready_capabilities_provider)
     return ResearchCampaignController(
         store,
         client,
@@ -119,6 +125,49 @@ def make_controller(
         refill_threshold=refill_threshold,
         **kwargs,
     )
+
+
+def ready_capabilities_provider() -> dict[str, Any]:
+    """Return a complete, deterministic test-only Campaign preflight response."""
+    from src.research_controller.contracts import source_bundle_sha256
+    from src.research_controller.state_machine.controller import REQUIRED_EXECUTION_TYPES
+
+    return {
+        "status": "ok",
+        "action": "get_research_loop_capabilities",
+        "http_status": 200,
+        "retryable": False,
+        "data": {
+            "contract_bundle_sha256": source_bundle_sha256(),
+            "protocol_versions": ["research-loop.v1"],
+            "strategy_contracts": ["strategy-signal.v1"],
+            "research_sdk_versions": ["research_sdk.v1"],
+            "data_snapshot_versions": ["data_snapshot.v1"],
+            "universe_snapshot_versions": ["universe_snapshot.v1"],
+            "market_panel_versions": ["market_panel.v1"],
+            "factor_snapshot_versions": ["factor_snapshot.v1"],
+            "evidence_bundle_versions": ["evidence_bundle.v1"],
+            "review_report_versions": ["review_report.v1"],
+            "markets": ["CN"],
+            "frequencies": ["1d"],
+            "execution_types": list(REQUIRED_EXECUTION_TYPES),
+            "artifact_uploads": {
+                "schema_version": "artifact_upload_capabilities.v1",
+                "allowlist": {
+                    "factor_values": ["application/vnd.apache.parquet", "text/csv"],
+                },
+            },
+            "readiness": {
+                name: {
+                    "status": "ready",
+                    "available": True,
+                    "ready": True,
+                    "reason": "test-only explicit readiness",
+                }
+                for name in ("sandbox", "reviewer", "data", "universe", "longbridge")
+            },
+        },
+    }
 
 
 def sample_campaign_request(**overrides: Any) -> dict[str, Any]:

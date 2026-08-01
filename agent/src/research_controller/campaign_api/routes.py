@@ -206,3 +206,17 @@ def register_research_campaign_routes(
             raise HTTPException(status_code=404, detail="campaign not found") from None
         except CampaignValidationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/research-campaigns/{campaign_id}/cancellations/reconcile",
+        dependencies=[Depends(require_auth)],
+    )
+    async def reconcile_campaign_cancellations(campaign_id: str) -> dict[str, Any]:
+        """Explicitly retry visible blocked remote-cancellation diagnostics."""
+        _validate_path_param(campaign_id, "campaign_id")
+        try:
+            return _controller_for().reconcile_campaign_cancellations(campaign_id)
+        except CampaignNotFoundError:
+            raise HTTPException(status_code=404, detail="campaign not found") from None
+        except CampaignValidationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc

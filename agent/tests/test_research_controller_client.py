@@ -386,7 +386,18 @@ def test_client_against_mock_happy_path(tmp_path: Path) -> None:
         client = DsaLoopClient(base_url=server.base_url, timeout=30.0)
         caps = client.get_capabilities()
         assert caps["status"] == "ok"
-        assert "strategy_sandbox_smoke" in caps["data"]["execution_types"]
+        advertised = caps["data"]["execution_types"]
+        assert advertised == [
+            "data_snapshot_build",
+            "market_panel_export",
+            "factor_snapshot_validate",
+            "factor_smoke",
+            "factor_screen",
+            "gate_challenger",
+        ]
+        assert "strategy_sandbox_smoke" not in advertised
+        assert "portfolio_backtest" not in advertised
+        assert "robustness" not in advertised
 
         payload = {
             "experiment_id": "exp_wire_001",
