@@ -1,0 +1,28 @@
+{
+  "objective": "研究 A 股量价因子组合的横截面稳定性",
+  "market": "CN",
+  "frequency": "1d",
+  "development_window": {
+    "start_date": "2010-01-01",
+    "end_date": "2021-12-31"
+  },
+  "factor_scope": "a_share_native_357",
+  "universe_policy": "pit_liquid_active_v1",
+  "target_universe_size": 1200,
+  "automation": {
+    "generate_hypotheses": true,
+    "generate_strategy_code": true,
+    "auto_repair": true,
+    "parameter_search": true,
+    "reinforcement_learning_challengers": true,
+    "gate_challengers": true,
+    "open_locked_holdout": false
+  },
+  "budgets": {
+    "llm_calls_rolling_24h": 100,
+    "candidate_versions_rolling_24h": 50,
+    "sandbox_concurrency": 1,
+    "factor_batch_concurrency": 2
+  },
+  "report_language": "zh-CN"
+}

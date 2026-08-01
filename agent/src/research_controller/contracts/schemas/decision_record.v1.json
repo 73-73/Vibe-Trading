@@ -1,0 +1,84 @@
+{
+  "additionalProperties": false,
+  "description": "Vibe 的不可变下一步决定；只记录控制器决定，不修改 DSA 执行。",
+  "properties": {
+    "decision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "round_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Round Id",
+      "type": "string"
+    },
+    "action": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Action",
+      "type": "string"
+    },
+    "rationale": {
+      "maxLength": 2000,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "source_evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Source Evidence Ids",
+      "type": "array"
+    },
+    "source_review_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Review Id"
+    },
+    "next_candidate_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Candidate Id"
+    },
+    "next_candidate_version": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Candidate Version"
+    }
+  },
+  "required": [
+    "decision_id",
+    "round_id",
+    "action",
+    "rationale"
+  ],
+  "title": "DecisionRecord",
+  "type": "object"
+}

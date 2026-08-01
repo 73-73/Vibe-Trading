@@ -1,0 +1,25 @@
+{
+  "schema_version": "research_campaign.v1",
+  "campaign_id": "campaign_001",
+  "research_goal_id": "goal_001",
+  "status": "running",
+  "config_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "protocol_bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "data_snapshot_id": "data_dev_001",
+  "universe_snapshot_id": "universe_pit_001",
+  "gate_policy_version": "gate_champion_v1",
+  "last_event_sequences": {
+    "exp_momentum_volume_001": 1024
+  },
+  "queue_counts": {
+    "pending": 8,
+    "running": 1,
+    "blocked": 0
+  },
+  "budget_usage": {
+    "llm_calls_rolling_24h": 24,
+    "candidate_versions_rolling_24h": 7
+  },
+  "created_at": "2026-08-01T10:00:00Z",
+  "updated_at": "2026-08-01T11:00:00Z"
+}

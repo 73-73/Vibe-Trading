@@ -1,0 +1,31 @@
+{
+  "protocol_versions": ["research-loop.v1"],
+  "strategy_contracts": ["strategy-signal.v1"],
+  "research_sdk_versions": ["research_sdk.v1"],
+  "data_snapshot_versions": ["data_snapshot.v1"],
+  "universe_snapshot_versions": ["universe_snapshot.v1"],
+  "market_panel_versions": ["market_panel.v1"],
+  "factor_snapshot_versions": ["factor_snapshot.v1"],
+  "evidence_bundle_versions": ["evidence_bundle.v1"],
+  "review_report_versions": ["review_report.v1"],
+  "markets": ["CN"],
+  "frequencies": ["1d"],
+  "execution_types": [
+    "data_snapshot_build",
+    "market_panel_export",
+    "factor_snapshot_validate",
+    "factor_smoke",
+    "factor_screen",
+    "strategy_static_validate",
+    "strategy_sandbox_smoke",
+    "portfolio_backtest",
+    "robustness",
+    "gate_challenger"
+  ],
+  "limits": {
+    "candidate_source_bytes": 65536,
+    "artifact_upload_bytes_max": 5368709120,
+    "event_page_size_max": 200,
+    "mcp_response_bytes_max": 10000000
+  }
+}

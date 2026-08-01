@@ -1,0 +1,87 @@
+{
+  "additionalProperties": false,
+  "description": "factor_snapshot.v1：因子值快照 manifest。\n\n大型因子值使用 Parquet artifact；DSA 注册时必须完成 artifact 哈希、Schema、\n有限数值、唯一键、日期边界、PIT 与公式 manifest 一致性校验（§6.15）。",
+  "properties": {
+    "schema_version": {
+      "default": "factor_snapshot.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "data_snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Data Snapshot Id",
+      "type": "string"
+    },
+    "universe_snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Universe Snapshot Id",
+      "type": "string"
+    },
+    "factor_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Factor Ids",
+      "type": "array"
+    },
+    "formula_versions": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Formula Versions",
+      "type": "object"
+    },
+    "columns": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Columns",
+      "type": "array"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "artifact_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "data_snapshot_id",
+    "universe_snapshot_id",
+    "factor_ids",
+    "columns",
+    "row_count",
+    "artifact_id",
+    "sha256",
+    "created_at"
+  ],
+  "title": "FactorSnapshot",
+  "type": "object"
+}

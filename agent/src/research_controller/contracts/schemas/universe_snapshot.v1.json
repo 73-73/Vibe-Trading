@@ -1,0 +1,92 @@
+{
+  "additionalProperties": false,
+  "description": "universe_snapshot.v1：PIT 股票池快照。\n\nuniverse artifact 使用长表，每个交易日只能使用当日 ``available_at`` 已\n可见的最新状态；缺少当日可见记录时该股票不具备资格。",
+  "properties": {
+    "schema_version": {
+      "default": "universe_snapshot.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "market": {
+      "pattern": "^[A-Z]{2}$",
+      "title": "Market",
+      "type": "string"
+    },
+    "mode": {
+      "default": "point_in_time",
+      "title": "Mode",
+      "type": "string"
+    },
+    "start_date": {
+      "format": "date",
+      "title": "Start Date",
+      "type": "string"
+    },
+    "end_date": {
+      "format": "date",
+      "title": "End Date",
+      "type": "string"
+    },
+    "selection_policy_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Selection Policy Version",
+      "type": "string"
+    },
+    "required_fields": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Required Fields",
+      "type": "array"
+    },
+    "artifact_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "distinct_symbol_count": {
+      "minimum": 0,
+      "title": "Distinct Symbol Count",
+      "type": "integer"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "market",
+    "start_date",
+    "end_date",
+    "selection_policy_version",
+    "required_fields",
+    "artifact_id",
+    "row_count",
+    "distinct_symbol_count",
+    "sha256",
+    "created_at"
+  ],
+  "title": "UniverseSnapshot",
+  "type": "object"
+}

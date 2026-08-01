@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "ErrorCategory": {
+      "enum": [
+        "CONTRACT_ERROR",
+        "SECURITY_ERROR",
+        "CODE_RUNTIME",
+        "DATA_ERROR",
+        "INFRA_ERROR",
+        "RESEARCH_REJECTION"
+      ],
+      "title": "ErrorCategory",
+      "type": "string"
+    },
+    "SourceLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 0,
+          "title": "Line",
+          "type": "integer"
+        },
+        "column": {
+          "minimum": 0,
+          "title": "Column",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "line",
+        "column"
+      ],
+      "title": "SourceLocation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "execution_error.v1：规范化执行错误（traceback 已脱敏）。",
+  "properties": {
+    "schema_version": {
+      "default": "execution_error.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "error_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Error Id",
+      "type": "string"
+    },
+    "execution_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Execution Id",
+      "type": "string"
+    },
+    "attempt_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "candidate_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Id"
+    },
+    "candidate_version": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Version"
+    },
+    "stage": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Stage",
+      "type": "string"
+    },
+    "category": {
+      "$ref": "#/$defs/ErrorCategory"
+    },
+    "code": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Code",
+      "type": "string"
+    },
+    "retryable": {
+      "default": false,
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "repairable": {
+      "default": false,
+      "title": "Repairable",
+      "type": "boolean"
+    },
+    "message": {
+      "maxLength": 2000,
+      "title": "Message",
+      "type": "string"
+    },
+    "sanitized_traceback": {
+      "anyOf": [
+        {
+          "maxLength": 8000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sanitized Traceback"
+    },
+    "source_location": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceLocation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "observed": {
+      "additionalProperties": true,
+      "title": "Observed",
+      "type": "object"
+    },
+    "allowed_actions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Allowed Actions",
+      "type": "array"
+    },
+    "forbidden_changes": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Forbidden Changes",
+      "type": "array"
+    },
+    "artifact_refs": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Artifact Refs",
+      "type": "array"
+    },
+    "error_fingerprint": {
+      "title": "Error Fingerprint",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "error_id",
+    "execution_id",
+    "attempt_id",
+    "stage",
+    "category",
+    "code",
+    "message",
+    "error_fingerprint",
+    "created_at"
+  ],
+  "title": "ExecutionError",
+  "type": "object"
+}

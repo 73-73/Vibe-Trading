@@ -1,0 +1,19 @@
+{
+  "schema_version": "holdout_authorization.v1",
+  "authorization_id": "holdout_auth_001",
+  "campaign_id": "campaign_001",
+  "candidate_id": "candidate_factor_combo_001",
+  "candidate_version": 3,
+  "candidate_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "parameter_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "gate_policy_version": "gate_champion_v1",
+  "window": {
+    "start_date": "2022-01-01",
+    "end_date": "2025-12-31"
+  },
+  "approved_by": "human_user",
+  "issued_at": "2026-08-01T10:00:00Z",
+  "expires_at": "2026-08-01T10:30:00Z",
+  "single_use": true,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

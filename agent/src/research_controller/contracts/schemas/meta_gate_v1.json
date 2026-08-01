@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "MetaGatePromotionRules": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap_difference_lower_95ci_gt": {
+          "default": 0.0,
+          "title": "Bootstrap Difference Lower 95Ci Gt",
+          "type": "number"
+        },
+        "maximum_single_fold_degradation": {
+          "default": 0.05,
+          "title": "Maximum Single Fold Degradation",
+          "type": "number"
+        },
+        "selection_rate_ratio_min": {
+          "default": 0.5,
+          "title": "Selection Rate Ratio Min",
+          "type": "number"
+        },
+        "selection_rate_ratio_max": {
+          "default": 1.5,
+          "title": "Selection Rate Ratio Max",
+          "type": "number"
+        },
+        "maximum_added_required_checks": {
+          "default": 2,
+          "title": "Maximum Added Required Checks",
+          "type": "integer"
+        }
+      },
+      "title": "MetaGatePromotionRules",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "meta_gate_v1：Challenger 能否替换 Champion 的固定判定规则。\n\nChallenger 的目标是更稳定地预测候选能否通过后续 Development robustness，\n不是直接优化回测收益。元门槛本身不能由 Vibe 自动修改。",
+  "properties": {
+    "schema_version": {
+      "default": "meta_gate_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "minimum_comparable_experiments": {
+      "minimum": 1,
+      "title": "Minimum Comparable Experiments",
+      "type": "integer"
+    },
+    "minimum_positive_labels": {
+      "minimum": 1,
+      "title": "Minimum Positive Labels",
+      "type": "integer"
+    },
+    "minimum_negative_labels": {
+      "minimum": 1,
+      "title": "Minimum Negative Labels",
+      "type": "integer"
+    },
+    "folds": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Folds",
+      "type": "array"
+    },
+    "label": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Label",
+      "type": "string"
+    },
+    "primary_metric": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Primary Metric",
+      "type": "string"
+    },
+    "promotion_rules": {
+      "$ref": "#/$defs/MetaGatePromotionRules"
+    },
+    "locked_holdout_access": {
+      "default": false,
+      "title": "Locked Holdout Access",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "minimum_comparable_experiments",
+    "minimum_positive_labels",
+    "minimum_negative_labels",
+    "label",
+    "primary_metric"
+  ],
+  "title": "MetaGate",
+  "type": "object"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "market_panel.v1",
+  "panel_id": "panel_dev_001",
+  "data_snapshot_id": "data_dev_001",
+  "universe_snapshot_id": "universe_pit_001",
+  "market": "CN",
+  "frequency": "1d",
+  "layout": "long_parquet_partitioned",
+  "partitioning": ["year", "month"],
+  "columns": [
+    "trade_date",
+    "available_at",
+    "symbol",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "vwap"
+  ],
+  "units": {
+    "open": "CNY_per_share",
+    "high": "CNY_per_share",
+    "low": "CNY_per_share",
+    "close": "CNY_per_share",
+    "volume": "share",
+    "amount": "CNY",
+    "vwap": "CNY_per_share"
+  },
+  "row_count": 9876543,
+  "artifact_id": "artifact_market_panel_001",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:00:00Z"
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": "review_report.v1",
+  "review_id": "review_001",
+  "execution_id": "exec_001",
+  "classification": "code_bug",
+  "confidence": 0.91,
+  "root_causes": [
+    {
+      "evidence_ref": "artifact_contract_case_001",
+      "finding": "零成交量导致除数为零"
+    }
+  ],
+  "gate_assessment": {
+    "policy_version": "gate_champion_v1",
+    "result": "not_evaluable",
+    "failed_checks": []
+  },
+  "repair_contract": {
+    "repairable": true,
+    "must_preserve": ["hypothesis", "factor_ids", "data_snapshot_id", "gate_policy_version"],
+    "allowed_changes": ["增加零值保护", "将非有限值转换为 NaN"],
+    "forbidden_changes": ["更换研究区间", "降低交易成本", "删除失败股票"]
+  },
+  "recommended_action": "submit_candidate_revision",
+  "recommended_tests": ["zero_volume_case", "all_nan_cross_section_case"],
+  "limitations": [],
+  "model": "resolved-model-id",
+  "prompt_version": "dsa-reviewer.v1",
+  "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "input_evidence_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:31:00Z"
+}

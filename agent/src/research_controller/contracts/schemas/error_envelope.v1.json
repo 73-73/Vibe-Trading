@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "ErrorCategory": {
+      "enum": [
+        "CONTRACT_ERROR",
+        "SECURITY_ERROR",
+        "CODE_RUNTIME",
+        "DATA_ERROR",
+        "INFRA_ERROR",
+        "RESEARCH_REJECTION"
+      ],
+      "title": "ErrorCategory",
+      "type": "string"
+    },
+    "ResearchError": {
+      "additionalProperties": false,
+      "description": "统一错误包中的 ``error`` 对象（§4.5）。",
+      "properties": {
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/ErrorCategory"
+        },
+        "message": {
+          "maxLength": 2000,
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "artifact_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Artifact Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "category",
+        "message"
+      ],
+      "title": "ResearchError",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "统一错误包（§4.5）。",
+  "properties": {
+    "protocol_version": {
+      "default": "research-loop.v1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "status": {
+      "default": "error",
+      "title": "Status",
+      "type": "string"
+    },
+    "action": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Action",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "error": {
+      "$ref": "#/$defs/ResearchError"
+    }
+  },
+  "required": [
+    "action",
+    "error"
+  ],
+  "title": "ErrorEnvelope",
+  "type": "object"
+}

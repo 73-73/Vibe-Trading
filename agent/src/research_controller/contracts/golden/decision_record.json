@@ -1,0 +1,10 @@
+{
+  "decision_id": "decision_001",
+  "round_id": "round_20260801_01",
+  "action": "submit_candidate_revision",
+  "rationale": "接受 DSA Reviewer 对零成交量除零错误的判断",
+  "source_evidence_ids": ["evidence_001"],
+  "source_review_id": "review_001",
+  "next_candidate_id": "candidate_factor_combo_001",
+  "next_candidate_version": 2
+}

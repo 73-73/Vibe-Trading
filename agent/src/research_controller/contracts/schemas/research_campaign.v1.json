@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "CampaignBudgetUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "llm_calls_rolling_24h": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Llm Calls Rolling 24H",
+          "type": "integer"
+        },
+        "candidate_versions_rolling_24h": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Candidate Versions Rolling 24H",
+          "type": "integer"
+        }
+      },
+      "title": "CampaignBudgetUsage",
+      "type": "object"
+    },
+    "CampaignStatus": {
+      "enum": [
+        "initializing",
+        "running",
+        "paused",
+        "waiting_budget",
+        "blocked",
+        "completed",
+        "cancelled"
+      ],
+      "title": "CampaignStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "research_campaign.v1：Vibe 本地持久化的 Campaign 状态真源（§7.2.1）。",
+  "properties": {
+    "schema_version": {
+      "default": "research_campaign.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "campaign_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "research_goal_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Research Goal Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/CampaignStatus"
+    },
+    "config_sha256": {
+      "title": "Config Sha256",
+      "type": "string"
+    },
+    "protocol_bundle_sha256": {
+      "title": "Protocol Bundle Sha256",
+      "type": "string"
+    },
+    "data_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data Snapshot Id"
+    },
+    "universe_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Universe Snapshot Id"
+    },
+    "gate_policy_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Gate Policy Version",
+      "type": "string"
+    },
+    "last_event_sequences": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Last Event Sequences",
+      "type": "object"
+    },
+    "queue_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Queue Counts",
+      "type": "object"
+    },
+    "budget_usage": {
+      "$ref": "#/$defs/CampaignBudgetUsage"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "campaign_id",
+    "research_goal_id",
+    "status",
+    "config_sha256",
+    "protocol_bundle_sha256",
+    "gate_policy_version",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ResearchCampaign",
+  "type": "object"
+}

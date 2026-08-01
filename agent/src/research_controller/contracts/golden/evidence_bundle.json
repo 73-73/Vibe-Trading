@@ -1,0 +1,65 @@
+{
+  "schema_version": "evidence_bundle.v1",
+  "evidence_id": "evidence_001",
+  "experiment_id": "exp_momentum_volume_001",
+  "execution_id": "exec_001",
+  "execution_type": "portfolio_backtest",
+  "status": "completed",
+  "inputs": {
+    "candidate_id": "candidate_factor_combo_001",
+    "candidate_version": 2,
+    "candidate_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "data_snapshot_id": "data_dev_001",
+    "data_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "universe_snapshot_id": "universe_pit_001",
+    "factor_snapshot_id": "factor_snapshot_001",
+    "factor_formula_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gate_policy_version": "gate_champion_v1",
+    "research_sdk_version": "research_sdk.v1",
+    "seed": 191
+  },
+  "window": {
+    "start_date": "2010-01-01",
+    "end_date": "2021-12-31"
+  },
+  "data_quality": {
+    "eligible_symbol_count": 1200,
+    "completed_symbol_count": 1187,
+    "failed_symbol_count": 13,
+    "valid_cross_section_ratio": 0.94,
+    "error_summary_artifact_id": "artifact_symbol_errors_001"
+  },
+  "metrics": {
+    "rank_ic": {"status": "computed", "artifact_id": "artifact_rank_ic_001"},
+    "quantile_portfolio": {"status": "computed", "artifact_id": "artifact_quantile_001"},
+    "shared_capital_portfolio": {"status": "computed", "artifact_id": "artifact_portfolio_001"},
+    "turnover_and_cost": {"status": "computed", "artifact_id": "artifact_cost_001"},
+    "random_control": {"status": "computed", "artifact_id": "artifact_random_001"},
+    "rolling_oos": {"status": "computed", "artifact_id": "artifact_oos_001"},
+    "parameter_perturbation": {"status": "computed", "artifact_id": "artifact_perturb_001"},
+    "double_cost": {"status": "computed", "artifact_id": "artifact_double_cost_001"},
+    "liquidity_capacity": {"status": "computed", "artifact_id": "artifact_liquidity_001"}
+  },
+  "gate_results": [
+    {
+      "check_id": "coverage",
+      "status": "pass",
+      "observed": 0.94,
+      "operator": ">=",
+      "threshold": 0.8,
+      "evidence_ref": "artifact_metrics_001"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "artifact_metrics_001",
+      "kind": "metrics_json",
+      "media_type": "application/json",
+      "size_bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "limitations": [],
+  "bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:00:00Z"
+}

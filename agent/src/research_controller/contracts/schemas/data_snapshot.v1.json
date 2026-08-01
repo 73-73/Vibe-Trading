@@ -1,0 +1,198 @@
+{
+  "$defs": {
+    "DataLayer": {
+      "enum": [
+        "development",
+        "locked_holdout",
+        "forward_observation"
+      ],
+      "title": "DataLayer",
+      "type": "string"
+    },
+    "DataQualitySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SnapshotQualityStatus"
+        },
+        "symbol_count": {
+          "minimum": 0,
+          "title": "Symbol Count",
+          "type": "integer"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "failed_symbol_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failed Symbol Count",
+          "type": "integer"
+        },
+        "warning_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Warning Count",
+          "type": "integer"
+        },
+        "report_artifact_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Report Artifact Id"
+        }
+      },
+      "required": [
+        "status",
+        "symbol_count",
+        "row_count"
+      ],
+      "title": "DataQualitySummary",
+      "type": "object"
+    },
+    "DataSourceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "file_count": {
+          "minimum": 0,
+          "title": "File Count",
+          "type": "integer"
+        },
+        "quick_fingerprint": {
+          "title": "Quick Fingerprint",
+          "type": "string"
+        },
+        "content_manifest_artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Content Manifest Artifact Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "file_count",
+        "quick_fingerprint",
+        "content_manifest_artifact_id"
+      ],
+      "title": "DataSourceManifest",
+      "type": "object"
+    },
+    "SnapshotQualityStatus": {
+      "enum": [
+        "valid",
+        "degraded",
+        "invalid"
+      ],
+      "title": "SnapshotQualityStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "data_snapshot.v1：开发期 / 锁定留出 / 前瞻观察的数据快照。",
+  "properties": {
+    "schema_version": {
+      "default": "data_snapshot.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "layer": {
+      "$ref": "#/$defs/DataLayer"
+    },
+    "market": {
+      "pattern": "^[A-Z]{2}$",
+      "title": "Market",
+      "type": "string"
+    },
+    "frequency": {
+      "default": "1d",
+      "title": "Frequency",
+      "type": "string"
+    },
+    "start_date": {
+      "format": "date",
+      "title": "Start Date",
+      "type": "string"
+    },
+    "end_date": {
+      "format": "date",
+      "title": "End Date",
+      "type": "string"
+    },
+    "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+    },
+    "adjustment": {
+      "pattern": "^[a-z0-9_]+$",
+      "title": "Adjustment",
+      "type": "string"
+    },
+    "calendar_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Calendar Version",
+      "type": "string"
+    },
+    "mapping_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Mapping Version",
+      "type": "string"
+    },
+    "source_manifest": {
+      "$ref": "#/$defs/DataSourceManifest"
+    },
+    "quality": {
+      "$ref": "#/$defs/DataQualitySummary"
+    },
+    "content_sha256": {
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "layer",
+    "market",
+    "start_date",
+    "end_date",
+    "as_of",
+    "adjustment",
+    "calendar_version",
+    "mapping_version",
+    "source_manifest",
+    "quality",
+    "content_sha256",
+    "created_at"
+  ],
+  "title": "DataSnapshot",
+  "type": "object"
+}

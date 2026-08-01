@@ -1,0 +1,237 @@
+{
+  "$defs": {
+    "ExitPolicy": {
+      "enum": [
+        "leave_top_n",
+        "hold_to_eviction",
+        "time_based"
+      ],
+      "title": "ExitPolicy",
+      "type": "string"
+    },
+    "ParameterSpec": {
+      "additionalProperties": false,
+      "description": "单个参数声明：使用 JSON Schema 的宽松子集描述约束。",
+      "properties": {
+        "type": {
+          "pattern": "^(number|integer|boolean|string)$",
+          "title": "Type",
+          "type": "string"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ParameterSpec",
+      "type": "object"
+    },
+    "RebalanceFrequency": {
+      "enum": [
+        "daily",
+        "weekly",
+        "monthly"
+      ],
+      "title": "RebalanceFrequency",
+      "type": "string"
+    },
+    "StrategyDirection": {
+      "enum": [
+        "higher_is_better",
+        "lower_is_better"
+      ],
+      "title": "StrategyDirection",
+      "type": "string"
+    },
+    "StrategyManifest": {
+      "additionalProperties": false,
+      "description": "strategy-signal.v1 候选的声明性 manifest。",
+      "properties": {
+        "factor_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Factor Ids",
+          "type": "array"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ParameterSpec"
+          },
+          "maxProperties": 16,
+          "title": "Parameters",
+          "type": "object"
+        },
+        "default_parameters": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": "Default Parameters",
+          "type": "object"
+        },
+        "direction": {
+          "$ref": "#/$defs/StrategyDirection",
+          "default": "higher_is_better"
+        },
+        "rebalance_frequency": {
+          "$ref": "#/$defs/RebalanceFrequency",
+          "default": "weekly"
+        },
+        "top_n": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Top N",
+          "type": "integer"
+        },
+        "max_holdings": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Holdings",
+          "type": "integer"
+        },
+        "exit_policy": {
+          "$ref": "#/$defs/ExitPolicy",
+          "default": "leave_top_n"
+        },
+        "seed": {
+          "default": 191,
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "factor_ids",
+        "top_n",
+        "max_holdings"
+      ],
+      "title": "StrategyManifest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "注册策略候选的请求体（§6.3）。\n\n不接受本机路径；只接受有大小上限的源码和 manifest。",
+  "properties": {
+    "candidate_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "candidate_version": {
+      "minimum": 1,
+      "title": "Candidate Version",
+      "type": "integer"
+    },
+    "parent_version": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Version"
+    },
+    "repair_of_error_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repair Of Error Id"
+    },
+    "contract_version": {
+      "default": "strategy-signal.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "source_code": {
+      "maxLength": 65536,
+      "title": "Source Code",
+      "type": "string"
+    },
+    "source_sha256": {
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "manifest": {
+      "$ref": "#/$defs/StrategyManifest"
+    }
+  },
+  "required": [
+    "candidate_id",
+    "candidate_version",
+    "source_code",
+    "source_sha256",
+    "manifest"
+  ],
+  "title": "CandidateRegistration",
+  "type": "object"
+}

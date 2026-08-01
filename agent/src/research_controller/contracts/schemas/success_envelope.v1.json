@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "description": "统一成功包（§4.4）。",
+  "properties": {
+    "protocol_version": {
+      "default": "research-loop.v1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "status": {
+      "default": "ok",
+      "title": "Status",
+      "type": "string"
+    },
+    "action": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Action",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "data": {
+      "additionalProperties": true,
+      "title": "Data",
+      "type": "object"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "SuccessEnvelope",
+  "type": "object"
+}

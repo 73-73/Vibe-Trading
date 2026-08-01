@@ -1,0 +1,14 @@
+{
+  "protocol_version": "research-loop.v1",
+  "status": "error",
+  "action": "start_execution",
+  "request_id": "req_002",
+  "error": {
+    "code": "candidate_not_validated",
+    "category": "CONTRACT_ERROR",
+    "message": "候选策略尚未通过静态检查",
+    "retryable": false,
+    "details": {},
+    "artifact_refs": []
+  }
+}
