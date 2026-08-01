@@ -409,9 +409,59 @@ def test_cursor_expired_blocks_campaign(tmp_path: Path) -> None:
         for _ in range(10):
             ctrl.run_pipeline_once(campaign_id)
         campaign = ctrl.get_campaign(campaign_id)
-        # 游标落入已清理区间时 DSA 返回 410，Controller 进入 blocked 并给出恢复提示
+        # 游标落入已清理区间时 DSA 返回 410；存在依赖 DSA 事件推进的 in-flight 执行，
+        # 本地状态不足以继续 → blocked，并如实标注 DSA state snapshot 恢复资源缺口（§11.9）。
         assert campaign["status"] == "blocked"
         assert campaign["blocked_reason"] and "event cursor expired" in campaign["blocked_reason"]
+        assert "state snapshot" in campaign["blocked_reason"]
+    finally:
+        server.stop()
+
+
+def test_cursor_expired_recovery_continues_when_local_state_sufficient(tmp_path: Path) -> None:
+    """波次 C：410 时本地已落库状态足够 → 不 blocked，尽力本地恢复并继续。"""
+    server = MockDsaServer("cursor_expired")
+    server.start()
+    try:
+        store = CampaignStore(db_path=tmp_path / "recover_sufficient.db")
+        ctrl = make_controller(store, server.base_url, hypothesis_generator=_one_hypothesis_generator)
+        campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+        # 推进到实验已注册且 campaign 尚未被 410 blocked（cursor 仍未越过可读窗口）
+        for _ in range(12):
+            ctrl.run_pipeline_once(campaign_id)
+            if ctrl.get_experiments(campaign_id) and ctrl.get_campaign(campaign_id)["status"] == "running":
+                break
+        assert ctrl.get_experiments(campaign_id), "实验应在 12 次迭代内注册"
+        assert ctrl.get_campaign(campaign_id)["status"] == "running"
+        exp_id = ctrl.get_experiments(campaign_id)[-1]["experiment_id"]
+        # 本地状态足够：所有 execution 与实验均为终态
+        store.update_experiment(exp_id, phase="completed")
+        for exec_record in store.list_executions(campaign_id, exp_id):
+            store.update_execution(exec_record["execution_id"], status="completed")
+        # 强制游标越过 DSA 可读窗口（cursor_expired_after_sequence=5）触发 410
+        store.set_campaign_cursor(campaign_id, exp_id, 100)
+        ctrl.run_pipeline_once(campaign_id)
+        campaign = ctrl.get_campaign(campaign_id)
+        assert campaign["status"] != "blocked", "本地状态足够时应尽力恢复并继续而非 blocked"
+    finally:
+        server.stop()
+
+
+def test_cursor_expired_blocks_when_local_state_insufficient(tmp_path: Path) -> None:
+    """波次 C：410 且本地存在 in-flight execution → blocked，原因注明 state snapshot 缺口。"""
+    server = MockDsaServer("cursor_expired")
+    server.start()
+    try:
+        store = CampaignStore(db_path=tmp_path / "recover_insufficient.db")
+        ctrl = make_controller(store, server.base_url, hypothesis_generator=_one_hypothesis_generator)
+        campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+        for _ in range(10):
+            ctrl.run_pipeline_once(campaign_id)
+            if ctrl.get_campaign(campaign_id)["status"] == "blocked":
+                break
+        campaign = ctrl.get_campaign(campaign_id)
+        assert campaign["status"] == "blocked"
+        assert "state snapshot" in campaign["blocked_reason"]
     finally:
         server.stop()
 
@@ -722,7 +772,7 @@ def test_data_snapshot_build_failed_blocks_campaign(tmp_path: Path) -> None:
     store = CampaignStore(db_path=tmp_path / "c.db")
     ctrl = make_controller(store, "http://127.0.0.1:1")
     campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
-    store.update_campaign(campaign_id, status="running")
+    store.update_campaign(campaign_id, status="running", universe_snapshot_id="universe_test_001")
     store.upsert_execution(
         {
             "execution_id": "exec_snap_failed_001",
@@ -899,3 +949,43 @@ def test_review_completed_uses_review_normally(tmp_path: Path) -> None:
     assert decision is not None
     assert decision["action"] == "accept_result"
     assert "缺少 DSA 独立评审" not in decision["rationale"]
+
+
+# ---------------------------------------------------------------------------
+# R13（波次 C）：campaign 完成后自动生成最终中文报告（§15.3）
+# ---------------------------------------------------------------------------
+
+
+def test_auto_report_generated_on_completion(tmp_path: Path, mock: MockDsaServer) -> None:
+    """R13：全部实验终态 → _sync_campaign_status 置 completed 后自动生成报告。"""
+    from src.research_controller.reporting.report import report_section_titles
+
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, mock.base_url, hypothesis_generator=_one_hypothesis_generator)
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+
+    summary = _drive_to_complete(ctrl, campaign_id)
+    assert summary["status"] == "completed"
+
+    report = store.get_latest_report(campaign_id)
+    assert report is not None, "campaign 进入 completed 后必须自动生成报告"
+    assert report["report_id"].startswith("report_")
+    for title in report_section_titles():
+        assert title in report["report_md"]
+
+    # 幂等：重复生成返回既有报告，不产生重复行
+    before = store.get_latest_report(campaign_id)["report_id"]
+    again = ctrl.generate_report(campaign_id)
+    assert again["report_id"] == before
+    assert store.get_latest_report(campaign_id)["report_id"] == before
+
+
+def test_generate_report_with_sparse_evidence_does_not_raise(tmp_path: Path, mock: MockDsaServer) -> None:
+    """R13：无足够证据（实验未注册 / 无 evidence）时也能生成含缺口的报告，不抛异常。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    ctrl = make_controller(store, mock.base_url)
+    campaign_id = ctrl.create_campaign(sample_campaign_request())["campaign_id"]
+
+    result = ctrl.generate_report(campaign_id)
+    assert result["report_id"].startswith("report_")
+    assert "（本轮尚无完成执行的证据包）" in result["report_md"]

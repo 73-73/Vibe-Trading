@@ -9,6 +9,13 @@ The bridge also exposes the research-loop.v1 tools (``get_research_loop_*``,
 and the data tools) per spec §7.1. Those proxy to the loopback-only DSA
 research-loop API at ``http://127.0.0.1:8011`` by default (``DSA_RESEARCH_LOOP_URL``).
 
+The bridge also exposes the Vibe Research Campaign tools per spec §7.2.4
+(``create_research_campaign`` … ``get_campaign_report``). Those only talk to the
+Vibe Campaign Controller through the loopback-only api_server Campaign API at
+``http://127.0.0.1:8000`` by default (``VIBE_CAMPAIGN_API_URL``), carrying an
+``Authorization: Bearer`` header from ``VIBE_TRADING_API_KEY`` — they never build
+low-level DSA research-loop requests directly.
+
 Intentionally imports NO ``src.*`` modules — DSA-specific logic lives only
 in this file so the core tool registry / env schema stay generic.
 
@@ -579,6 +586,171 @@ def register_factor_snapshot(payload: dict[str, Any], idempotency_key: str = "")
 def get_factor_snapshot(factor_snapshot_id: str) -> str:
     """Fetch a factor snapshot manifest and validation summary (§6.15)."""
     return _research_loop_request("get_factor_snapshot", resource_id=factor_snapshot_id)
+
+
+# ---------------------------------------------------------------------------
+# Vibe Research Campaign 工具（§7.2.4）
+# ---------------------------------------------------------------------------
+#
+# 用户（Vibe Agent）通过这些高层工具操作 Campaign，而不是手工拼接低层 DSA
+# research-loop 请求。每个工具只转发到 Vibe api_server 的 Campaign API
+# （loopback ``http://127.0.0.1:8000``，可用 ``VIBE_CAMPAIGN_API_URL`` 覆盖），
+# 并携带 ``Authorization: Bearer <VIBE_TRADING_API_KEY>``。Controller 在服务端
+# 内部调用 DSA MCP 工具；本桥不接触 DSA research-loop 状态机。
+
+_CAMPAIGN_API_URL_VAR = "VIBE_CAMPAIGN_API_URL"
+_CAMPAIGN_API_KEY_VAR = "VIBE_TRADING_API_KEY"
+_DEFAULT_CAMPAIGN_API_URL = "http://127.0.0.1:8000"
+_CAMPAIGN_PREFIX = "/research-campaigns"
+
+
+def _campaign_request(
+    action: str,
+    method: str,
+    path: str,
+    *,
+    base_url: str | None = None,
+    timeout: float | None = None,
+    payload: Any = None,
+    params: dict[str, Any] | None = None,
+    client_factory: Callable[..., Any] | None = None,
+) -> str:
+    """Issue one Vibe api_server Research Campaign request (§7.2.4).
+
+    Loopback-only; every request carries an ``Authorization: Bearer`` header
+    built from ``VIBE_TRADING_API_KEY``. Env defaults: ``VIBE_CAMPAIGN_API_URL``
+    (``http://127.0.0.1:8000``) and ``DSA_LAB_TIMEOUT_SECONDS``. Errors never
+    echo the bearer token or the full request.
+    """
+    api_key = os.getenv(_CAMPAIGN_API_KEY_VAR, "").strip()
+    if not api_key:
+        return _error(action, "VIBE_TRADING_API_KEY not set")
+    try:
+        effective_base_url = _validated_base_url(
+            base_url if base_url is not None else os.getenv(_CAMPAIGN_API_URL_VAR, _DEFAULT_CAMPAIGN_API_URL),
+            var_name=_CAMPAIGN_API_URL_VAR,
+        )
+        effective_timeout = _coerce_timeout(
+            timeout if timeout is not None else os.getenv("DSA_LAB_TIMEOUT_SECONDS", str(_DEFAULT_DSA_LAB_TIMEOUT)),
+            var_name="DSA_LAB_TIMEOUT_SECONDS",
+        )
+        headers = {"Authorization": f"Bearer {api_key}"}
+        factory = client_factory or _default_client
+        with factory(base_url=effective_base_url, timeout=effective_timeout) as client:
+            response = client.request(method, path, json=payload, headers=headers, params=params)
+    except (TypeError, ValueError) as exc:
+        return _error(action, str(exc))
+    except httpx.RequestError:
+        return _error(action, "vibe_campaign_api_unavailable", http_status=503, retryable=True)
+
+    if len(response.content) > _MAX_RESPONSE_BYTES:
+        return _error(action, "dsa_response_too_large", http_status=response.status_code)
+    try:
+        resp_body: Any = response.json()
+    except ValueError:
+        resp_body = {"message": response.text[:1000]}
+    if response.is_error:
+        detail = resp_body.get("detail", resp_body) if isinstance(resp_body, dict) else resp_body
+        return _error(
+            action,
+            "vibe_campaign_request_failed",
+            http_status=response.status_code,
+            retryable=_http_status_retryable(response.status_code),
+            detail=detail,
+        )
+    return json.dumps({"status": "ok", "action": action, "data": resp_body}, ensure_ascii=False, allow_nan=False)
+
+
+def _campaign_path(campaign_id: Any, suffix: str = "") -> str:
+    """Validate *campaign_id* (``^[A-Za-z0-9_-]{1,128}$``) and build its path."""
+    normalized = _resource_id(campaign_id, name="campaign_id")
+    return f"{_CAMPAIGN_PREFIX}/{normalized}{suffix}"
+
+
+@mcp.tool()
+def create_research_campaign(payload: dict[str, Any]) -> str:
+    """创建 Research Campaign（§7.2.1 / §7.2.4）。"""
+    return _campaign_request("create_research_campaign", "POST", _CAMPAIGN_PREFIX, payload=payload)
+
+
+@mcp.tool()
+def list_research_campaigns(status: str = "", limit: int = 50) -> str:
+    """列出 Research Campaign，可选按 status 过滤（§7.2.4）。"""
+    params: dict[str, Any] = {}
+    if status:
+        params["status"] = status
+    params["limit"] = limit
+    return _campaign_request("list_research_campaigns", "GET", _CAMPAIGN_PREFIX, params=params)
+
+
+@mcp.tool()
+def get_research_campaign(campaign_id: str) -> str:
+    """获取单个 Research Campaign 详情（§7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id)
+    except ValueError as exc:
+        return _error("get_research_campaign", str(exc))
+    return _campaign_request("get_research_campaign", "GET", path)
+
+
+@mcp.tool()
+def pause_research_campaign(campaign_id: str) -> str:
+    """暂停 Research Campaign（§7.2.3 / §7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/pause")
+    except ValueError as exc:
+        return _error("pause_research_campaign", str(exc))
+    return _campaign_request("pause_research_campaign", "POST", path)
+
+
+@mcp.tool()
+def resume_research_campaign(campaign_id: str) -> str:
+    """恢复 Research Campaign（§7.2.3 / §7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/resume")
+    except ValueError as exc:
+        return _error("resume_research_campaign", str(exc))
+    return _campaign_request("resume_research_campaign", "POST", path)
+
+
+@mcp.tool()
+def cancel_research_campaign(campaign_id: str) -> str:
+    """取消 Research Campaign（§7.2.3 / §7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/cancel")
+    except ValueError as exc:
+        return _error("cancel_research_campaign", str(exc))
+    return _campaign_request("cancel_research_campaign", "POST", path)
+
+
+@mcp.tool()
+def get_campaign_candidates(campaign_id: str) -> str:
+    """获取 Campaign 的策略候选列表（§7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/candidates")
+    except ValueError as exc:
+        return _error("get_campaign_candidates", str(exc))
+    return _campaign_request("get_campaign_candidates", "GET", path)
+
+
+@mcp.tool()
+def get_candidate_repair_lineage(campaign_id: str) -> str:
+    """获取 Campaign 的自动修复链路（§17.5 / §7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/repairs")
+    except ValueError as exc:
+        return _error("get_candidate_repair_lineage", str(exc))
+    return _campaign_request("get_candidate_repair_lineage", "GET", path)
+
+
+@mcp.tool()
+def get_campaign_report(campaign_id: str) -> str:
+    """获取 Campaign 最新中文研究报告（§15.3 / §7.2.4）。"""
+    try:
+        path = _campaign_path(campaign_id, "/reports/latest")
+    except ValueError as exc:
+        return _error("get_campaign_report", str(exc))
+    return _campaign_request("get_campaign_report", "GET", path)
 
 
 if __name__ == "__main__":

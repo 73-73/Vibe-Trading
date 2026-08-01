@@ -29,9 +29,9 @@
     "campaign_create_request.v1": "f06b20e1db0c143c56450292da3af03cbe43117698ced7ff6eb1c376f31d20c1"
   },
   "sdk_manifest": "research_sdk.v1.json",
-  "golden_fixture_manifest_sha256": "30f60b93dc78228a894424b9891434a61c8a36a7f6e5f960b1e1bcacb59c8d22",
+  "golden_fixture_manifest_sha256": "09939a6d7267f173814b1f074050546915f42f34f02aceb4cb1ad15a30eec2f3",
   "generator_version": "research-contract-generator.v1",
-  "source_commit": "8c50445e26264b1c4cf150f7e4af4a7a8bb3c28d",
-  "created_at": "2026-08-01T03:34:20.325637+00:00",
-  "bundle_sha256": "2b8bee5a2ca2976ab19922d2a2f603ce851ffb4b5aa5b51b8a81007c8f0d12c4"
+  "source_commit": "5d66dee43e90f6a59d68733687b27087ab7a70c5",
+  "created_at": "2026-08-01T09:07:06.756828+00:00",
+  "bundle_sha256": "ab0dae3812331dd147c77e830e35a08ac42deb288c6955f443509f29b062340d"
 }

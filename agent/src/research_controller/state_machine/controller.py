@@ -272,6 +272,20 @@ class ResearchCampaignController:
         rows = self.store.list_campaigns(status=status, limit=limit)
         return [self._campaign_detail(self.store.get_campaign(r["campaign_id"])) for r in rows]
 
+    def list_active_campaign_ids(self) -> list[str]:
+        """Return campaign ids still being driven by the pipeline (§13).
+
+        Only ``initializing`` / ``running`` / ``waiting_budget`` campaigns are
+        polled; ``paused`` / ``cancelled`` / ``blocked`` / ``completed`` are not.
+        Read-only convenience for the pipeline driver; backward compatible.
+        """
+        rows = self.store.list_campaigns(limit=500)
+        return [
+            r["campaign_id"]
+            for r in rows
+            if r["status"] in ("initializing", "running", "waiting_budget")
+        ]
+
     def pause_campaign(self, campaign_id: str, *, cancel_running: bool = False) -> dict[str, Any]:
         campaign = self.store.get_campaign(campaign_id)
         if campaign is None:
@@ -336,13 +350,39 @@ class ResearchCampaignController:
         return self.store.get_latest_report(campaign_id)
 
     def generate_report(self, campaign_id: str) -> dict[str, Any]:
-        """Build and persist the final Chinese report (§15.3)."""
+        """Build and persist the final Chinese report (§15.3 / R13).
+
+        幂等：若该 campaign 已生成过报告，直接返回既有最新报告，不重复渲染。
+        报告在无足够证据 / 缺独立评审时做“含缺口”降级渲染，不抛异常
+        （§15.3 / §9.3），因此 completed 自动触发与 HTTP 手动触发都能安全调用。
+        """
         self._require_campaign(campaign_id)
+        existing = self.store.get_latest_report(campaign_id)
+        if existing is not None:
+            return existing
         data = self._report_data(campaign_id)
         markdown = render_campaign_report(data)
         report_id = _short_id("report")
         self.store.save_report(campaign_id, report_id, markdown)
-        return {"campaign_id": campaign_id, "report_id": report_id, "report_md": markdown, "report": data}
+        latest = self.store.get_latest_report(campaign_id)
+        if latest is None:  # pragma: no cover - save_report 刚刚写入一行
+            return {"campaign_id": campaign_id, "report_id": report_id, "report_md": markdown}
+        return latest
+
+    def _generate_report_on_completion(self, campaign_id: str) -> None:
+        """R13：campaign 进入 completed 时自动产出最终中文报告（幂等）。
+
+        报告生成失败不应回滚已完成的 campaign：此处捕获并记录，仍可通过
+        ``POST /reports/generate`` 按需触发。
+        """
+        try:
+            self.generate_report(campaign_id)
+        except Exception:
+            logger.exception(
+                "auto-generate report failed for completed campaign %s "
+                "(can be generated on demand via POST /reports/generate)",
+                campaign_id,
+            )
 
     def _require_campaign(self, campaign_id: str) -> dict[str, Any]:
         campaign = self.store.get_campaign(campaign_id)
@@ -525,10 +565,17 @@ class ResearchCampaignController:
                 if result["status"] == "error":
                     error = result.get("error") or {}
                     if error.get("code") == "event_cursor_expired":
-                        self._block_campaign(
-                            campaign,
-                            f"event cursor expired for {exp_id}: {error.get('message', '')}",
+                        # 波次 C：不再仅 _block_campaign，先做尽力本地恢复。
+                        recovered = self._recover_cursor_expired(
+                            campaign, exp_id, error.get("message", "")
                         )
+                        if not recovered:
+                            return  # 已 blocked
+                        # 尽力恢复成功：重置游标到 0 触发全量重新拉取（已落库事件按
+                        # message_id 去重），避免下次以过期游标再次 410。
+                        self.store.set_campaign_cursor(campaign_id, exp_id, 0)
+                        cursor = 0
+                        continue
                     elif result.get("retryable"):
                         self._mark_unavailable()
                     return
@@ -764,6 +811,45 @@ class ResearchCampaignController:
             campaign["campaign_id"], status="blocked", blocked_reason=reason, updated_at=_now()
         )
 
+    def _recover_cursor_expired(self, campaign: dict[str, Any], exp_id: str, message: str) -> bool:
+        """410 ``event_cursor_expired`` 的尽力本地恢复（波次 C）。
+
+        DSA 侧 ``experiment_state_snapshot.v1``（§11.9）恢复资源未实现，
+        ``state_snapshot_id`` 恒为 None，无法从 DSA 全量恢复。这里从本地 store
+        已落库 events（executions/evidence/reviews 已随事件同步）重建该实验的
+        latest 状态：
+
+        - 若该实验没有未终态 execution（queued/running/waiting_review），说明
+          已落库事件足以支撑继续推进（决策 / 完成），返回 True；
+        - 否则存在依赖 DSA 事件才能推进的 in-flight 执行，返回 False 并
+          blocked，blocked_reason 如实标注“游标过期且 DSA 无 state snapshot
+          恢复资源（§11.9 未实现）”。
+
+        ``last_event_sequences`` 已停在最新已处理 sequence；调用方视返回决定
+        重置游标做全量重新拉取。
+        """
+        campaign_id = campaign["campaign_id"]
+        executions = self.store.list_executions(campaign_id, exp_id)
+        active = [e for e in executions if e["status"] in ("queued", "running", "waiting_review")]
+        evidence_ids = [e.get("evidence_id") for e in executions if e.get("evidence_id")]
+        review_ids = [e.get("review_id") for e in executions if e.get("review_id")]
+        if not active:
+            logger.warning(
+                "event cursor expired for %s; DSA state snapshot restore resource unavailable "
+                "（§11.9 未实现），从本地重建 latest 状态（executions=%d evidence=%d reviews=%d）并继续",
+                exp_id,
+                len(executions),
+                len(evidence_ids),
+                len(review_ids),
+            )
+            return True
+        self._block_campaign(
+            campaign,
+            f"event cursor expired for {exp_id}: {message}; "
+            f"DSA state snapshot 恢复资源未实现（§11.9），本地状态不足以继续",
+        )
+        return False
+
     # ==================================================================
     # 主动推进（§13）
     # ==================================================================
@@ -778,11 +864,13 @@ class ResearchCampaignController:
         if not self._budget_ok(campaign):
             self._enter_waiting_budget(campaign)
             return
+        if campaign.get("universe_snapshot_id") is None:
+            # 先构建 universe（DSA §6.12-6.13/§11.7），数据快照引用真实 universe id；
+            # 顺序不可颠倒——build_data_snapshot 会校验 universe 引用存在（R08 fail-closed）。
+            self._ensure_universe_snapshot(campaign)
+            return
         if campaign["data_snapshot_id"] is None or campaign["current_stage"] == "WAIT_DATA":
             self._ensure_data_snapshot(campaign)
-            return
-        if campaign.get("universe_snapshot_id") is None:
-            self._ensure_universe_snapshot(campaign)
             return
         self._ensure_factor_inventory(campaign)
         self._ensure_experiment_queue(campaign)
@@ -819,7 +907,8 @@ class ResearchCampaignController:
                 "end_date": window.get("end_date"),
                 "adjustment": "qfq",
                 "mapping_version": "cn_daily_mapping.v1",
-                "universe_snapshot_id": config.get("universe_policy"),
+                # 引用已构建的 universe 快照（R08），不用配置的 universe_policy 字符串。
+                "universe_snapshot_id": campaign.get("universe_snapshot_id"),
             }
             result = self.dsa.build_data_snapshot(payload, idempotency_key=f"snapshot_{campaign_id}")
             if result["status"] == "error":
@@ -1688,6 +1777,8 @@ class ResearchCampaignController:
                 queue_counts_json=json.dumps(self._queue_counts(experiments), ensure_ascii=False, sort_keys=True),
                 updated_at=_now(),
             )
+            # R13：进入 completed 时自动生成最终中文报告（幂等，可安全重入）。
+            self._generate_report_on_completion(campaign_id)
             return
         if any(e["phase"] in ("waiting_data", "blocked") for e in experiments):
             self.store.update_campaign(

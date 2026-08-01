@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,11 @@ from src.research_controller.contracts import (
 _CONTRACTS_DIR = Path(__file__).resolve().parents[1] / "src" / "research_controller" / "contracts"
 _GOLDEN_DIR = _CONTRACTS_DIR / "golden"
 _GENERATED_DIR = _CONTRACTS_DIR / "generated"
+
+# DSA contract_bundle.v1 的期望 bundle_sha256（漂移手动触发基准，R11）。
+# 每次从 DSA 同步 bundle 副本（bundle_manifest.json + golden/ + schemas/）后，
+# 必须同步更新此常量；可用环境变量 DSA_EXPECTED_BUNDLE_SHA256 覆盖。
+_PINNED_DSA_BUNDLE_SHA256 = "ab0dae3812331dd147c77e830e35a08ac42deb288c6955f443509f29b062340d"
 
 # golden fixture 文件名 -> 生成的客户端模型模块/类名
 GOLDEN_TO_MODEL = {
@@ -59,6 +65,40 @@ def test_local_copy_has_no_drift() -> None:
     manifest = load_bundle_manifest()
     golden_count = len(list(_GOLDEN_DIR.glob("*.json")))
     assert golden_count >= len(GOLDEN_TO_MODEL)
+
+
+def test_bundle_sha256_matches_pinned_dsa_sha() -> None:
+    """本地 bundle_sha256 必须等于固定记录的 DSA bundle_sha256（手动触发基准）。
+
+    Vibe CI 无法 clone 私有 DSA 仓库，跨仓漂移由该固定值在每次契约测试中强制；
+    从 DSA 同步 bundle 副本时必须同步更新 _PINNED_DSA_BUNDLE_SHA256。
+    """
+    expected = os.environ.get("DSA_EXPECTED_BUNDLE_SHA256", _PINNED_DSA_BUNDLE_SHA256)
+    assert source_bundle_sha256() == expected
+
+
+def test_bundle_matches_dsa_source_manifest() -> None:
+    """跨仓 drift 门禁：从 DSA 源 manifest 全量对比（R11，D2=A）。
+
+    设置 ``DSA_CONTRACT_MANIFEST_PATH`` 指向 DSA 仓库的
+    ``services/backtest_lab/research_loop/contract_bundle/manifest.json`` 后启用；
+    未设置时 skip，保证本机 / 常规 CI 不依赖 DSA 检出路径。
+    断言 bundle_sha256、逐 schema 哈希、golden fixture manifest 与 DSA 源一致。
+    """
+    dsa_manifest_path = os.environ.get("DSA_CONTRACT_MANIFEST_PATH")
+    if not dsa_manifest_path:
+        pytest.skip("DSA_CONTRACT_MANIFEST_PATH not set; skipping cross-repo drift check")
+    dsa = json.loads(Path(dsa_manifest_path).read_text(encoding="utf-8"))
+    assert dsa.get("schema_version") == "contract_bundle.v1", dsa.get("schema_version")
+
+    local = load_bundle_manifest()
+    assert dsa["bundle_sha256"] == local["bundle_sha256"], (
+        f"bundle_sha256 drift vs DSA source: {local['bundle_sha256']} != {dsa['bundle_sha256']}"
+    )
+    assert dsa["schemas"] == local["schemas"], "schema hashes drift vs DSA source"
+    assert dsa["golden_fixture_manifest_sha256"] == local["golden_fixture_manifest_sha256"], (
+        "golden fixture manifest drift vs DSA source"
+    )
 
 
 def test_generated_models_parse_golden() -> None:

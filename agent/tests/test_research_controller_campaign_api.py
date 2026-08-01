@@ -117,6 +117,35 @@ def test_report_latest_404_before_generation(tmp_path: Path, mock: MockDsaServer
     assert response.status_code == 404
 
 
+def test_report_generate_endpoint_success_idempotent_and_404(tmp_path: Path, mock: MockDsaServer) -> None:
+    """POST /reports/generate：成功触发生成、重复调用幂等、campaign 不存在 404。"""
+    store = CampaignStore(db_path=tmp_path / "c.db")
+    controller = make_controller(store, mock.base_url)
+    client = TestClient(_app(controller), client=("127.0.0.1", 50000))
+    campaign_id = client.post("/research-campaigns", json=sample_campaign_request()).json()["campaign_id"]
+
+    generated = client.post(f"/research-campaigns/{campaign_id}/reports/generate")
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["report_id"].startswith("report_")
+    assert "report_md" in body
+    assert "# Vibe 研究 Campaign 中文报告" in body["report_md"]
+
+    # 幂等：再次触发返回同一份报告
+    again = client.post(f"/research-campaigns/{campaign_id}/reports/generate")
+    assert again.status_code == 200
+    assert again.json()["report_id"] == body["report_id"]
+
+    # 只读端点能看到同一份报告
+    latest = client.get(f"/research-campaigns/{campaign_id}/reports/latest")
+    assert latest.status_code == 200
+    assert latest.json()["report_id"] == body["report_id"]
+
+    # 不存在的 campaign → 404
+    missing = client.post("/research-campaigns/campaign_missing/reports/generate")
+    assert missing.status_code == 404
+
+
 def test_pause_resume_cancel_endpoints(tmp_path: Path, mock: MockDsaServer) -> None:
     client = _client(tmp_path, mock)
     campaign_id = client.post("/research-campaigns", json=sample_campaign_request()).json()["campaign_id"]

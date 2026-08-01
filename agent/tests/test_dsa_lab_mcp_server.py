@@ -351,6 +351,120 @@ def test_lab_request_request_error_yields_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — Vibe Research Campaign tools (§7.2.4)
+# ---------------------------------------------------------------------------
+
+
+def test_create_research_campaign_posts_to_campaign_api_with_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # create_research_campaign 必须 POST 到 /research-campaigns 且带 Bearer 头。
+    monkeypatch.setenv("VIBE_TRADING_API_KEY", "secret-token")
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=_ok_response(status=201, body={"campaign_id": "campaign-001"}),
+    )
+    monkeypatch.setattr(dsa, "_default_client", lambda **kw: fake)
+    payload = {"market": "A", "ticker_set": ["600519"], "development_window": {"start": "2020-01-01", "end": "2021-12-31"}}
+    result = dsa.create_research_campaign(payload=payload)
+
+    call = fake.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/research-campaigns"
+    assert call["kwargs"]["json"] == payload
+    assert call["kwargs"]["headers"] == {"Authorization": "Bearer secret-token"}
+    envelope = json.loads(result)
+    assert envelope["status"] == "ok"
+    assert envelope["action"] == "create_research_campaign"
+    assert envelope["data"]["campaign_id"] == "campaign-001"
+
+
+def test_create_research_campaign_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VIBE_TRADING_API_KEY", raising=False)
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=_ok_response(status=201, body={"campaign_id": "c1"}),
+    )
+    monkeypatch.setattr(dsa, "_default_client", lambda **kw: fake)
+    result = dsa.create_research_campaign(payload={"market": "A"})
+    envelope = json.loads(result)
+    assert envelope["status"] == "error"
+    assert envelope["error"] == "VIBE_TRADING_API_KEY not set"
+    assert fake.calls == []
+
+
+def test_campaign_request_rejects_non_loopback_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # VIBE_CAMPAIGN_API_URL 非 loopback 时报错必须提示该变量名，且不发起请求。
+    monkeypatch.setenv("VIBE_TRADING_API_KEY", "secret-token")
+    monkeypatch.setenv("VIBE_CAMPAIGN_API_URL", "https://example.com")
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=_ok_response(body={}),
+    )
+    result = dsa._campaign_request(
+        "get_research_campaign", "GET", "/research-campaigns/c1", client_factory=lambda **kw: fake
+    )
+    envelope = json.loads(result)
+    assert envelope["status"] == "error"
+    assert "VIBE_CAMPAIGN_API_URL must be a loopback HTTP URL" in envelope["error"]
+    assert fake.calls == []
+
+
+def test_list_research_campaigns_forwards_status_and_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_API_KEY", "secret-token")
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=_ok_response(body=[{"campaign_id": "c1", "status": "active"}]),
+    )
+    monkeypatch.setattr(dsa, "_default_client", lambda **kw: fake)
+    result = dsa.list_research_campaigns(status="active", limit=20)
+
+    call = fake.calls[0]
+    assert call["method"] == "GET"
+    assert call["path"] == "/research-campaigns"
+    assert call["kwargs"]["params"] == {"status": "active", "limit": 20}
+    envelope = json.loads(result)
+    assert envelope["status"] == "ok"
+    assert envelope["data"][0]["campaign_id"] == "c1"
+
+
+def test_get_research_campaign_rejects_invalid_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # campaign_id 必须通过 ^[A-Za-z0-9_-]{1,128}$ 校验，发起 HTTP 前拒绝。
+    monkeypatch.setenv("VIBE_TRADING_API_KEY", "secret-token")
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=_ok_response(body={}),
+    )
+    monkeypatch.setattr(dsa, "_default_client", lambda **kw: fake)
+    result = dsa.get_research_campaign(campaign_id="bad/id")
+    envelope = json.loads(result)
+    assert envelope["status"] == "error"
+    assert "campaign_id must contain only letters, numbers, '_' or '-'" in envelope["error"]
+    assert fake.calls == []
+
+
+def test_campaign_request_surfaces_error_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_API_KEY", "secret-token")
+    fake = _FakeClient(
+        base_url="http://127.0.0.1:8000",
+        timeout=300.0,
+        response=httpx.Response(404, json={"detail": "campaign not found"}),
+    )
+    result = dsa._campaign_request(
+        "get_research_campaign", "GET", "/research-campaigns/c1", client_factory=lambda **kw: fake
+    )
+    envelope = json.loads(result)
+    assert envelope["status"] == "error"
+    assert envelope["http_status"] == 404
+    assert envelope["detail"] == "campaign not found"
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — spawn the real server over stdio via build_registry
 # ---------------------------------------------------------------------------
 
@@ -494,6 +608,16 @@ def test_dsa_lab_tools_registered(tmp_path: Path, dsa_lab_fake_server: str) -> N
         "mcp_dsa_lab_complete_artifact_upload",
         "mcp_dsa_lab_register_factor_snapshot",
         "mcp_dsa_lab_get_factor_snapshot",
+        # 波次 C：Vibe Research Campaign 高层工具（§7.2.4 追加，不改既有工具）
+        "mcp_dsa_lab_create_research_campaign",
+        "mcp_dsa_lab_list_research_campaigns",
+        "mcp_dsa_lab_get_research_campaign",
+        "mcp_dsa_lab_pause_research_campaign",
+        "mcp_dsa_lab_resume_research_campaign",
+        "mcp_dsa_lab_cancel_research_campaign",
+        "mcp_dsa_lab_get_campaign_candidates",
+        "mcp_dsa_lab_get_candidate_repair_lineage",
+        "mcp_dsa_lab_get_campaign_report",
     }
     for name in names:
         assert registry.get(name).is_readonly is False

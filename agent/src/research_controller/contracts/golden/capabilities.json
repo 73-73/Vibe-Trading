@@ -13,14 +13,7 @@
   "execution_types": [
     "data_snapshot_build",
     "market_panel_export",
-    "factor_snapshot_validate",
-    "factor_smoke",
-    "factor_screen",
-    "strategy_static_validate",
-    "strategy_sandbox_smoke",
-    "portfolio_backtest",
-    "robustness",
-    "gate_challenger"
+    "strategy_sandbox_smoke"
   ],
   "limits": {
     "candidate_source_bytes": 65536,

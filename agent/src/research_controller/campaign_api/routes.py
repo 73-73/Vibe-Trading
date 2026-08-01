@@ -162,6 +162,19 @@ def register_research_campaign_routes(
             raise HTTPException(status_code=404, detail="no report generated yet")
         return report
 
+    @app.post("/research-campaigns/{campaign_id}/reports/generate", dependencies=[Depends(require_auth)])
+    async def generate_report(campaign_id: str) -> dict[str, Any]:
+        """Trigger generation of the final Vibe Chinese report (§15.3 / R13).
+
+        Campaign 不存在 → 404。重复调用幂等：返回已生成的既有最新报告。
+        报告对无足够证据 / 缺独立评审做“含缺口”渲染，不抛异常。
+        """
+        _validate_path_param(campaign_id, "campaign_id")
+        try:
+            return _controller_for().generate_report(campaign_id)
+        except CampaignNotFoundError:
+            raise HTTPException(status_code=404, detail="campaign not found") from None
+
     # --- 暂停 / 恢复 / 取消（§7.2.3）-----------------------------------
 
     @app.post("/research-campaigns/{campaign_id}/pause", dependencies=[Depends(require_auth)])
