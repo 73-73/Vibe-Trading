@@ -440,6 +440,7 @@ def test_dsa_lab_tools_registered(tmp_path: Path, dsa_lab_fake_server: str) -> N
     registry = _build_registry(tmp_path, dsa_lab_fake_server)
     names = {n for n in registry.tool_names if n.startswith("mcp_dsa_lab_")}
     assert names == {
+        # 一期工具（不删除/改名）
         "mcp_dsa_lab_health",
         "mcp_dsa_lab_refresh_catalog",
         "mcp_dsa_lab_list_strategies",
@@ -451,6 +452,25 @@ def test_dsa_lab_tools_registered(tmp_path: Path, dsa_lab_fake_server: str) -> N
         "mcp_dsa_lab_get_run",
         "mcp_dsa_lab_cancel_batch",
         "mcp_dsa_lab_run_factor_research",
+        # M4 research-loop.v1 工具（§7.1 追加，不改一期工具）
+        "mcp_dsa_lab_get_research_loop_capabilities",
+        "mcp_dsa_lab_register_research_experiment",
+        "mcp_dsa_lab_register_strategy_candidate",
+        "mcp_dsa_lab_start_research_execution",
+        "mcp_dsa_lab_get_research_execution",
+        "mcp_dsa_lab_poll_research_events",
+        "mcp_dsa_lab_get_research_error",
+        "mcp_dsa_lab_get_research_evidence",
+        "mcp_dsa_lab_get_research_review",
+        "mcp_dsa_lab_record_research_decision",
+        "mcp_dsa_lab_cancel_research_execution",
+        "mcp_dsa_lab_build_data_snapshot",
+        "mcp_dsa_lab_get_data_snapshot",
+        "mcp_dsa_lab_export_market_panel",
+        "mcp_dsa_lab_create_artifact_upload",
+        "mcp_dsa_lab_complete_artifact_upload",
+        "mcp_dsa_lab_register_factor_snapshot",
+        "mcp_dsa_lab_get_factor_snapshot",
     }
     for name in names:
         assert registry.get(name).is_readonly is False
