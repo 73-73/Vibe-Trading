@@ -1,0 +1,17 @@
+{
+  "schema_version": "meta_gate_v1",
+  "minimum_comparable_experiments": 30,
+  "minimum_positive_labels": 5,
+  "minimum_negative_labels": 5,
+  "folds": ["2010-2015", "2016-2018", "2019-2021"],
+  "label": "later_robustness_pass",
+  "primary_metric": "balanced_accuracy",
+  "promotion_rules": {
+    "bootstrap_difference_lower_95ci_gt": 0.0,
+    "maximum_single_fold_degradation": 0.05,
+    "selection_rate_ratio_min": 0.5,
+    "selection_rate_ratio_max": 1.5,
+    "maximum_added_required_checks": 2
+  },
+  "locked_holdout_access": false
+}

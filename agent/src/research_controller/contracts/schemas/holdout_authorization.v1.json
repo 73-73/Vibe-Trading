@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "ResearchWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        },
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "ResearchWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "锁定留出集的一次性人工授权，有效期 30 分钟且只能消费一次。",
+  "properties": {
+    "schema_version": {
+      "default": "holdout_authorization.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "authorization_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "campaign_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "candidate_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "candidate_version": {
+      "minimum": 1,
+      "title": "Candidate Version",
+      "type": "integer"
+    },
+    "candidate_source_sha256": {
+      "title": "Candidate Source Sha256",
+      "type": "string"
+    },
+    "parameter_sha256": {
+      "title": "Parameter Sha256",
+      "type": "string"
+    },
+    "gate_policy_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Gate Policy Version",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/ResearchWindow"
+    },
+    "approved_by": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Approved By",
+      "type": "string"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "single_use": {
+      "default": true,
+      "title": "Single Use",
+      "type": "boolean"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "authorization_id",
+    "campaign_id",
+    "candidate_id",
+    "candidate_version",
+    "candidate_source_sha256",
+    "parameter_sha256",
+    "gate_policy_version",
+    "window",
+    "approved_by",
+    "issued_at",
+    "expires_at",
+    "sha256"
+  ],
+  "title": "HoldoutAuthorization",
+  "type": "object"
+}

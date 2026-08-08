@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "ArtifactUploadCapabilities": {
+      "additionalProperties": false,
+      "description": "允许上传的 artifact kind -> media type 版本化映射。",
+      "properties": {
+        "schema_version": {
+          "const": "artifact_upload_capabilities.v1",
+          "default": "artifact_upload_capabilities.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "allowlist": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Allowlist",
+          "type": "object"
+        }
+      },
+      "title": "ArtifactUploadCapabilities",
+      "type": "object"
+    },
+    "CapabilitiesLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_source_bytes": {
+          "default": 65536,
+          "minimum": 1024,
+          "title": "Candidate Source Bytes",
+          "type": "integer"
+        },
+        "artifact_upload_bytes_max": {
+          "default": 5368709120,
+          "minimum": 1024,
+          "title": "Artifact Upload Bytes Max",
+          "type": "integer"
+        },
+        "event_page_size_max": {
+          "default": 200,
+          "minimum": 1,
+          "title": "Event Page Size Max",
+          "type": "integer"
+        },
+        "mcp_response_bytes_max": {
+          "default": 10000000,
+          "minimum": 1024,
+          "title": "Mcp Response Bytes Max",
+          "type": "integer"
+        }
+      },
+      "title": "CapabilitiesLimits",
+      "type": "object"
+    },
+    "CapabilitiesReadiness": {
+      "additionalProperties": false,
+      "description": "Research Controller 启动前必须逐项检查的生产依赖。",
+      "properties": {
+        "sandbox": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "data": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "universe": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        },
+        "longbridge": {
+          "$ref": "#/$defs/CapabilityReadinessItem"
+        }
+      },
+      "title": "CapabilitiesReadiness",
+      "type": "object"
+    },
+    "CapabilityReadinessItem": {
+      "additionalProperties": false,
+      "description": "一个生产依赖的可机读预检状态。",
+      "properties": {
+        "status": {
+          "default": "not_ready",
+          "enum": [
+            "ready",
+            "not_ready"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "available": {
+          "default": false,
+          "title": "Available",
+          "type": "boolean"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "reason": {
+          "default": "not verified",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "title": "CapabilityReadinessItem",
+      "type": "object"
+    },
+    "ExecutionType": {
+      "enum": [
+        "data_snapshot_build",
+        "market_panel_export",
+        "factor_snapshot_validate",
+        "factor_smoke",
+        "factor_screen",
+        "strategy_static_validate",
+        "strategy_sandbox_smoke",
+        "portfolio_backtest",
+        "robustness",
+        "gate_challenger"
+      ],
+      "title": "ExecutionType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_bundle_sha256": {
+      "default": "0000000000000000000000000000000000000000000000000000000000000000",
+      "title": "Contract Bundle Sha256",
+      "type": "string"
+    },
+    "protocol_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Protocol Versions",
+      "type": "array"
+    },
+    "strategy_contracts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Strategy Contracts",
+      "type": "array"
+    },
+    "research_sdk_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Research Sdk Versions",
+      "type": "array"
+    },
+    "data_snapshot_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Data Snapshot Versions",
+      "type": "array"
+    },
+    "universe_snapshot_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Universe Snapshot Versions",
+      "type": "array"
+    },
+    "market_panel_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Market Panel Versions",
+      "type": "array"
+    },
+    "factor_snapshot_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Factor Snapshot Versions",
+      "type": "array"
+    },
+    "evidence_bundle_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Bundle Versions",
+      "type": "array"
+    },
+    "review_report_versions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Review Report Versions",
+      "type": "array"
+    },
+    "markets": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Markets",
+      "type": "array"
+    },
+    "frequencies": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Frequencies",
+      "type": "array"
+    },
+    "execution_types": {
+      "items": {
+        "$ref": "#/$defs/ExecutionType"
+      },
+      "title": "Execution Types",
+      "type": "array"
+    },
+    "readiness": {
+      "$ref": "#/$defs/CapabilitiesReadiness"
+    },
+    "artifact_uploads": {
+      "$ref": "#/$defs/ArtifactUploadCapabilities"
+    },
+    "limits": {
+      "$ref": "#/$defs/CapabilitiesLimits"
+    }
+  },
+  "title": "CapabilitiesResponse",
+  "type": "object"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "universe_snapshot.v1",
+  "snapshot_id": "universe_pit_001",
+  "market": "CN",
+  "mode": "point_in_time",
+  "start_date": "2010-01-01",
+  "end_date": "2021-12-31",
+  "selection_policy_version": "pit_liquid_active_v1",
+  "required_fields": [
+    "symbol",
+    "available_at",
+    "listing_date",
+    "delisting_date",
+    "is_st",
+    "trading_status",
+    "source_id"
+  ],
+  "artifact_id": "artifact_universe_rows_001",
+  "row_count": 1234567,
+  "distinct_symbol_count": 4312,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:00:00Z"
+}

@@ -114,3 +114,33 @@ jobs:
           agent/tests/test_background_tools.py
           agent/tests/test_bash_tool.py
           -q
+
+  # R11 跨仓契约 drift CI 门禁（D2=A：DSA 主动发布 Bundle + Vibe CI 对比哈希）。
+  # DSA 源仓库（73-73/daily_stock_analysis_private）为私有仓库，GitHub Actions
+  # 无法在无凭据下 clone；因此采用固定记录 DSA bundle_sha256 的折中方案：
+  # agent/tests/test_research_controller_contracts.py 中的
+  # _PINNED_DSA_BUNDLE_SHA256 在每次契约测试中强制与本地 bundle_manifest 一致，
+  # 漂移由手动触发（从 DSA 同步 bundle 副本时更新该常量）。
+  # 若未来 DSA 变为可公开 clone，可在本 job 中 clone 后设置
+  # DSA_CONTRACT_MANIFEST_PATH 走全量对比（test_bundle_matches_dsa_source_manifest）。
+  contract-drift:
+    name: contract-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # actions/setup-python v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install contracts test dependencies
+        run: python -m pip install pytest pydantic
+
+      - name: Run cross-repo contract drift gates
+        env:
+          PYTHONPATH: agent
+        run: python -m pytest agent/tests/test_research_controller_contracts.py -q

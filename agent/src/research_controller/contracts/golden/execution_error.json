@@ -1,0 +1,30 @@
+{
+  "schema_version": "execution_error.v1",
+  "error_id": "err_non_finite_001",
+  "execution_id": "exec_001",
+  "attempt_id": "attempt_001",
+  "candidate_id": "candidate_factor_combo_001",
+  "candidate_version": 1,
+  "stage": "sandbox_runtime",
+  "category": "CODE_RUNTIME",
+  "code": "non_finite_signal",
+  "retryable": true,
+  "repairable": true,
+  "message": "策略输出包含无限值",
+  "sanitized_traceback": "strategy.py:37 in generate_scores: x * 0 除零",
+  "source_location": {
+    "file": "strategy.py",
+    "line": 37,
+    "column": 12
+  },
+  "observed": {
+    "symbol": "000001.SZ",
+    "date": "2018-03-12",
+    "field": "score"
+  },
+  "allowed_actions": ["submit_candidate_revision", "abandon_candidate"],
+  "forbidden_changes": ["data_snapshot_id", "universe_snapshot_id", "gate_policy_version", "research_window"],
+  "artifact_refs": ["artifact_contract_case_001"],
+  "error_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:30:00Z"
+}

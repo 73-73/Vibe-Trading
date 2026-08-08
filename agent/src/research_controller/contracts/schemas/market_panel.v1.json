@@ -1,0 +1,101 @@
+{
+  "additionalProperties": false,
+  "description": "market_panel.v1：标准行情面板 manifest（长表 Parquet bundle）。",
+  "properties": {
+    "schema_version": {
+      "default": "market_panel.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "panel_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Panel Id",
+      "type": "string"
+    },
+    "data_snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Data Snapshot Id",
+      "type": "string"
+    },
+    "universe_snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Universe Snapshot Id",
+      "type": "string"
+    },
+    "market": {
+      "pattern": "^[A-Z]{2}$",
+      "title": "Market",
+      "type": "string"
+    },
+    "frequency": {
+      "default": "1d",
+      "title": "Frequency",
+      "type": "string"
+    },
+    "layout": {
+      "default": "long_parquet_partitioned",
+      "title": "Layout",
+      "type": "string"
+    },
+    "partitioning": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Partitioning",
+      "type": "array"
+    },
+    "columns": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Columns",
+      "type": "array"
+    },
+    "units": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Units",
+      "type": "object"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "artifact_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "panel_id",
+    "data_snapshot_id",
+    "universe_snapshot_id",
+    "market",
+    "columns",
+    "row_count",
+    "artifact_id",
+    "sha256",
+    "created_at"
+  ],
+  "title": "MarketPanel",
+  "type": "object"
+}

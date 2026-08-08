@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Kind",
+      "type": "string"
+    },
+    "media_type": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Media Type",
+      "type": "string"
+    },
+    "size_bytes": {
+      "minimum": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    },
+    "experiment_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Experiment Id"
+    }
+  },
+  "required": [
+    "kind",
+    "media_type",
+    "size_bytes",
+    "sha256"
+  ],
+  "title": "ArtifactUploadCreateRequest",
+  "type": "object"
+}

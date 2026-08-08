@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "DataLayer": {
+      "enum": [
+        "development",
+        "locked_holdout",
+        "forward_observation"
+      ],
+      "title": "DataLayer",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "layer": {
+      "$ref": "#/$defs/DataLayer"
+    },
+    "market": {
+      "default": "CN",
+      "pattern": "^[A-Z]{2}$",
+      "title": "Market",
+      "type": "string"
+    },
+    "frequency": {
+      "default": "1d",
+      "title": "Frequency",
+      "type": "string"
+    },
+    "start_date": {
+      "format": "date",
+      "title": "Start Date",
+      "type": "string"
+    },
+    "end_date": {
+      "format": "date",
+      "title": "End Date",
+      "type": "string"
+    },
+    "adjustment": {
+      "default": "qfq",
+      "pattern": "^[a-z0-9_]+$",
+      "title": "Adjustment",
+      "type": "string"
+    },
+    "mapping_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Mapping Version",
+      "type": "string"
+    },
+    "universe_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Universe Snapshot Id"
+    }
+  },
+  "required": [
+    "layer",
+    "start_date",
+    "end_date",
+    "mapping_version"
+  ],
+  "title": "DataSnapshotBuildRequest",
+  "type": "object"
+}

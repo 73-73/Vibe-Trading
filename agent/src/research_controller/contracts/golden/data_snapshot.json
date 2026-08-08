@@ -1,0 +1,29 @@
+{
+  "schema_version": "data_snapshot.v1",
+  "snapshot_id": "data_dev_001",
+  "layer": "development",
+  "market": "CN",
+  "frequency": "1d",
+  "start_date": "2010-01-01",
+  "end_date": "2021-12-31",
+  "as_of": "2026-08-01T10:00:00Z",
+  "adjustment": "qfq",
+  "calendar_version": "cn_exchange_calendar.v1",
+  "mapping_version": "cn_daily_mapping.v1",
+  "source_manifest": {
+    "provider": "local_csv",
+    "file_count": 5798,
+    "quick_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_manifest_artifact_id": "artifact_file_manifest_001"
+  },
+  "quality": {
+    "status": "valid",
+    "symbol_count": 4312,
+    "row_count": 9876543,
+    "failed_symbol_count": 0,
+    "warning_count": 12,
+    "report_artifact_id": "artifact_data_quality_001"
+  },
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-01T10:00:00Z"
+}

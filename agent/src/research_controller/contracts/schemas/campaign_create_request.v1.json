@@ -1,0 +1,163 @@
+{
+  "$defs": {
+    "CampaignAutomation": {
+      "additionalProperties": false,
+      "properties": {
+        "generate_hypotheses": {
+          "default": true,
+          "title": "Generate Hypotheses",
+          "type": "boolean"
+        },
+        "generate_strategy_code": {
+          "default": true,
+          "title": "Generate Strategy Code",
+          "type": "boolean"
+        },
+        "auto_repair": {
+          "default": true,
+          "title": "Auto Repair",
+          "type": "boolean"
+        },
+        "parameter_search": {
+          "default": true,
+          "title": "Parameter Search",
+          "type": "boolean"
+        },
+        "reinforcement_learning_challengers": {
+          "default": false,
+          "title": "Reinforcement Learning Challengers",
+          "type": "boolean"
+        },
+        "gate_challengers": {
+          "default": false,
+          "title": "Gate Challengers",
+          "type": "boolean"
+        },
+        "open_locked_holdout": {
+          "default": false,
+          "title": "Open Locked Holdout",
+          "type": "boolean"
+        }
+      },
+      "title": "CampaignAutomation",
+      "type": "object"
+    },
+    "CampaignBudgets": {
+      "additionalProperties": false,
+      "properties": {
+        "llm_calls_rolling_24h": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Llm Calls Rolling 24H",
+          "type": "integer"
+        },
+        "candidate_versions_rolling_24h": {
+          "default": 50,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Candidate Versions Rolling 24H",
+          "type": "integer"
+        },
+        "sandbox_concurrency": {
+          "default": 1,
+          "maximum": 16,
+          "minimum": 0,
+          "title": "Sandbox Concurrency",
+          "type": "integer"
+        },
+        "factor_batch_concurrency": {
+          "default": 2,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Factor Batch Concurrency",
+          "type": "integer"
+        }
+      },
+      "title": "CampaignBudgets",
+      "type": "object"
+    },
+    "ResearchWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        },
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "ResearchWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "创建 Research Campaign 的用户请求（§7.2.1）。",
+  "properties": {
+    "objective": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "market": {
+      "default": "CN",
+      "pattern": "^[A-Z]{2}$",
+      "title": "Market",
+      "type": "string"
+    },
+    "frequency": {
+      "default": "1d",
+      "title": "Frequency",
+      "type": "string"
+    },
+    "development_window": {
+      "$ref": "#/$defs/ResearchWindow"
+    },
+    "factor_scope": {
+      "default": "a_share_native_357",
+      "title": "Factor Scope",
+      "type": "string"
+    },
+    "universe_policy": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Universe Policy",
+      "type": "string"
+    },
+    "target_universe_size": {
+      "default": 1200,
+      "maximum": 10000,
+      "minimum": 50,
+      "title": "Target Universe Size",
+      "type": "integer"
+    },
+    "automation": {
+      "$ref": "#/$defs/CampaignAutomation"
+    },
+    "budgets": {
+      "$ref": "#/$defs/CampaignBudgets"
+    },
+    "report_language": {
+      "default": "zh-CN",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+      "title": "Report Language",
+      "type": "string"
+    }
+  },
+  "required": [
+    "objective",
+    "development_window",
+    "universe_policy"
+  ],
+  "title": "CampaignCreateRequest",
+  "type": "object"
+}

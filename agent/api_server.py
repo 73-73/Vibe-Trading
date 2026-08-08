@@ -314,6 +314,11 @@ from src.api.scheduled_routes import (  # noqa: E402, F401
 )
 
 
+# Research Campaign Routes (M4) - §7.2 DSA research-loop campaign controller
+from src.research_controller.campaign_api.assemble import register_research_campaign  # noqa: E402
+register_research_campaign(app)
+
+
 # ============================================================================
 # Main Entry Point
 # ============================================================================

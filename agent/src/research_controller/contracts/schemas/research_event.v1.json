@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "EventProducer": {
+      "enum": [
+        "dsa_api",
+        "dsa_judge",
+        "dsa_reviewer",
+        "vibe"
+      ],
+      "title": "EventProducer",
+      "type": "string"
+    },
+    "ResearchEventType": {
+      "enum": [
+        "experiment.created",
+        "experiment.waiting",
+        "experiment.completed",
+        "candidate.registered",
+        "candidate.validated",
+        "candidate.rejected",
+        "candidate.quarantined",
+        "execution.queued",
+        "execution.started",
+        "execution.progress",
+        "execution.completed",
+        "execution.failed",
+        "execution.cancelled",
+        "execution.interrupted",
+        "review.requested",
+        "review.started",
+        "review.completed",
+        "review.failed",
+        "decision.recorded",
+        "repair.submitted",
+        "repair.exhausted",
+        "gate.challenger_created",
+        "gate.challenger_promoted",
+        "gate.challenger_rejected"
+      ],
+      "title": "ResearchEventType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "一个持久化事件；payload 不得内嵌完整 dataframe/源码/traceback/报告。",
+  "properties": {
+    "protocol_version": {
+      "default": "research-loop.v1",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "message_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "sequence": {
+      "minimum": 0,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "producer": {
+      "$ref": "#/$defs/EventProducer"
+    },
+    "event_type": {
+      "$ref": "#/$defs/ResearchEventType"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "causation_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Causation Id"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "artifact_refs": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Artifact Refs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "message_id",
+    "experiment_id",
+    "sequence",
+    "producer",
+    "event_type",
+    "created_at"
+  ],
+  "title": "ResearchEvent",
+  "type": "object"
+}

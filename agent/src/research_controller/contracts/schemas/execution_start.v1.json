@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "ExecutionType": {
+      "enum": [
+        "data_snapshot_build",
+        "market_panel_export",
+        "factor_snapshot_validate",
+        "factor_smoke",
+        "factor_screen",
+        "strategy_static_validate",
+        "strategy_sandbox_smoke",
+        "portfolio_backtest",
+        "robustness",
+        "gate_challenger"
+      ],
+      "title": "ExecutionType",
+      "type": "string"
+    },
+    "ResearchWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        },
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "ResearchWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "execution_type": {
+      "$ref": "#/$defs/ExecutionType"
+    },
+    "candidate_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Id"
+    },
+    "candidate_version": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Version"
+    },
+    "data_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data Snapshot Id"
+    },
+    "universe_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Universe Snapshot Id"
+    },
+    "window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResearchWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "gate_policy_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Gate Policy Version",
+      "type": "string"
+    },
+    "runtime_profile": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Profile"
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Seed"
+    }
+  },
+  "required": [
+    "execution_type",
+    "gate_policy_version"
+  ],
+  "title": "ExecutionStartRequest",
+  "type": "object"
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": "gate_policy.v1",
+  "policy_id": "gate_champion",
+  "version": "gate_champion_v1",
+  "status": "champion",
+  "immutable_invariants": [
+    "pit_required",
+    "lookahead_forbidden",
+    "locked_holdout_forbidden_for_tuning",
+    "all_trials_recorded",
+    "common_cost_model_required"
+  ],
+  "checks": [
+    {
+      "check_id": "coverage",
+      "metric": "valid_cross_section_ratio",
+      "operator": ">=",
+      "threshold": 0.8,
+      "scope": "development_all",
+      "required": true,
+      "failure_action": "reject"
+    },
+    {
+      "check_id": "rolling_oos_direction",
+      "metric": "rolling_oos_positive_fold_ratio",
+      "operator": ">=",
+      "threshold": 0.6666667,
+      "scope": "development_folds",
+      "required": true,
+      "failure_action": "reject"
+    },
+    {
+      "check_id": "random_control",
+      "metric": "random_control_empirical_p",
+      "operator": "<=",
+      "threshold": 0.1,
+      "scope": "development_all",
+      "required": true,
+      "failure_action": "reject"
+    },
+    {
+      "check_id": "double_cost_direction",
+      "metric": "double_cost_excess_return_direction",
+      "operator": "==",
+      "threshold": 1,
+      "scope": "development_all",
+      "required": true,
+      "failure_action": "reject"
+    }
+  ],
+  "metric_registry_version": "research_metrics.v1",
+  "created_by": "bootstrap",
+  "created_at": "2026-08-01T10:00:00Z",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

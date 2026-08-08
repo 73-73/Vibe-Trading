@@ -36,6 +36,7 @@ __all__ = [
     "PathConfig",
     "OcrConfig",
     "MemoryConfig",
+    "DsaConfig",
 ]
 
 
@@ -503,6 +504,26 @@ class MemoryConfig(_EnvBase):
 
 
 # ---------------------------------------------------------------------------
+# DSA Backtest Lab / research-loop
+# ---------------------------------------------------------------------------
+
+
+class DsaConfig(_EnvBase):
+    """DSA Backtest Lab and research-loop endpoint configuration.
+
+    Sources: ``src/research_controller/client/dsa_client.py``.  Default ports
+    point at the real DSA service (8011), not the Mock DSA server.
+    """
+
+    lab_url: str = Field(alias="DSA_LAB_URL", default="http://127.0.0.1:8011")
+    lab_timeout_seconds: float = Field(alias="DSA_LAB_TIMEOUT_SECONDS", default=300.0)
+    research_loop_url: str = Field(alias="DSA_RESEARCH_LOOP_URL", default="http://127.0.0.1:8011")
+    research_loop_timeout_seconds: float = Field(
+        alias="DSA_RESEARCH_LOOP_TIMEOUT_SECONDS", default=30.0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Top-level composition
 # ---------------------------------------------------------------------------
 
@@ -526,6 +547,7 @@ class EnvConfig(_EnvBase):
     paths: PathConfig = Field(default_factory=PathConfig)
     ocr: OcrConfig = Field(default_factory=OcrConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    dsa: DsaConfig = Field(default_factory=DsaConfig)
 
     @model_validator(mode="after")
     def _resolve_api_key_alias(self) -> "EnvConfig":

@@ -1,0 +1,513 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "media_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "kind",
+        "media_type",
+        "size_bytes",
+        "sha256"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "EvidenceDataQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "eligible_symbol_count": {
+          "minimum": 0,
+          "title": "Eligible Symbol Count",
+          "type": "integer"
+        },
+        "completed_symbol_count": {
+          "minimum": 0,
+          "title": "Completed Symbol Count",
+          "type": "integer"
+        },
+        "failed_symbol_count": {
+          "minimum": 0,
+          "title": "Failed Symbol Count",
+          "type": "integer"
+        },
+        "valid_cross_section_ratio": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Valid Cross Section Ratio",
+          "type": "number"
+        },
+        "error_summary_artifact_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Summary Artifact Id"
+        }
+      },
+      "required": [
+        "eligible_symbol_count",
+        "completed_symbol_count",
+        "failed_symbol_count",
+        "valid_cross_section_ratio"
+      ],
+      "title": "EvidenceDataQuality",
+      "type": "object"
+    },
+    "EvidenceInputs": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "candidate_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Version"
+        },
+        "candidate_source_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Source Sha256"
+        },
+        "data_snapshot_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Snapshot Id"
+        },
+        "data_snapshot_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Snapshot Sha256"
+        },
+        "universe_snapshot_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Universe Snapshot Id"
+        },
+        "factor_snapshot_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Factor Snapshot Id"
+        },
+        "factor_formula_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Factor Formula Sha256"
+        },
+        "gate_policy_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gate Policy Version"
+        },
+        "research_sdk_version": {
+          "default": "research_sdk.v1",
+          "title": "Research Sdk Version",
+          "type": "string"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        }
+      },
+      "title": "EvidenceInputs",
+      "type": "object"
+    },
+    "EvidenceWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        },
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "EvidenceWindow",
+      "type": "object"
+    },
+    "ExecutionStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting_review",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "title": "ExecutionStatus",
+      "type": "string"
+    },
+    "ExecutionType": {
+      "enum": [
+        "data_snapshot_build",
+        "market_panel_export",
+        "factor_snapshot_validate",
+        "factor_smoke",
+        "factor_screen",
+        "strategy_static_validate",
+        "strategy_sandbox_smoke",
+        "portfolio_backtest",
+        "robustness",
+        "gate_challenger"
+      ],
+      "title": "ExecutionType",
+      "type": "string"
+    },
+    "GateCheckStatus": {
+      "enum": [
+        "pass",
+        "fail",
+        "not_evaluable"
+      ],
+      "title": "GateCheckStatus",
+      "type": "string"
+    },
+    "GateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Check Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/GateCheckStatus"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "maxLength": 8,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "evidence_ref": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Ref"
+        }
+      },
+      "required": [
+        "check_id",
+        "status"
+      ],
+      "title": "GateResult",
+      "type": "object"
+    },
+    "MetricStatus": {
+      "enum": [
+        "computed",
+        "not_evaluable"
+      ],
+      "title": "MetricStatus",
+      "type": "string"
+    },
+    "MetricSummary": {
+      "additionalProperties": false,
+      "description": "evidence_bundle 的 metrics 子项；不适用的模块用 not_evaluable。",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/MetricStatus"
+        },
+        "artifact_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Id"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason Code"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "MetricSummary",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "evidence_bundle.v1：一次确定性执行的全部证据与 gate 结果。",
+  "properties": {
+    "schema_version": {
+      "default": "evidence_bundle.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evidence_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "execution_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Execution Id",
+      "type": "string"
+    },
+    "execution_type": {
+      "$ref": "#/$defs/ExecutionType"
+    },
+    "status": {
+      "$ref": "#/$defs/ExecutionStatus"
+    },
+    "inputs": {
+      "$ref": "#/$defs/EvidenceInputs"
+    },
+    "window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "data_quality": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceDataQuality"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "metrics": {
+      "additionalProperties": {
+        "$ref": "#/$defs/MetricSummary"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "gate_results": {
+      "items": {
+        "$ref": "#/$defs/GateResult"
+      },
+      "title": "Gate Results",
+      "type": "array"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "bundle_sha256": {
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "experiment_id",
+    "execution_id",
+    "execution_type",
+    "status",
+    "bundle_sha256",
+    "created_at"
+  ],
+  "title": "EvidenceBundle",
+  "type": "object"
+}

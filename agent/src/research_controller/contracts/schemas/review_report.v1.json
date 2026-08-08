@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "GateAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "policy_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/GateCheckStatus",
+          "default": "not_evaluable"
+        },
+        "failed_checks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "policy_version"
+      ],
+      "title": "GateAssessment",
+      "type": "object"
+    },
+    "GateCheckStatus": {
+      "enum": [
+        "pass",
+        "fail",
+        "not_evaluable"
+      ],
+      "title": "GateCheckStatus",
+      "type": "string"
+    },
+    "RecommendedAction": {
+      "description": "Reviewer 可推荐的动作，是 DecisionAction 的受限子集。",
+      "enum": [
+        "accept_result",
+        "submit_candidate_revision",
+        "retry_same_execution",
+        "create_data_task",
+        "run_additional_test",
+        "abandon_candidate",
+        "quarantine_candidate",
+        "request_human_review"
+      ],
+      "title": "RecommendedAction",
+      "type": "string"
+    },
+    "RepairContract": {
+      "additionalProperties": false,
+      "properties": {
+        "repairable": {
+          "default": false,
+          "title": "Repairable",
+          "type": "boolean"
+        },
+        "must_preserve": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Must Preserve",
+          "type": "array"
+        },
+        "allowed_changes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Allowed Changes",
+          "type": "array"
+        },
+        "forbidden_changes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Forbidden Changes",
+          "type": "array"
+        }
+      },
+      "title": "RepairContract",
+      "type": "object"
+    },
+    "ReviewClassification": {
+      "enum": [
+        "valid_result",
+        "code_bug",
+        "contract_problem",
+        "data_problem",
+        "infrastructure_problem",
+        "security_violation",
+        "research_rejected",
+        "insufficient_evidence"
+      ],
+      "title": "ReviewClassification",
+      "type": "string"
+    },
+    "RootCause": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Evidence Ref",
+          "type": "string"
+        },
+        "finding": {
+          "maxLength": 2000,
+          "title": "Finding",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_ref",
+        "finding"
+      ],
+      "title": "RootCause",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "review_report.v1：DSA Reviewer 的结构化评审。\n\nReviewer 不得生成新的收益数值，也不得把失败解释为成功（§9.2 / §15.2）。",
+  "properties": {
+    "schema_version": {
+      "default": "review_report.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "review_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Review Id",
+      "type": "string"
+    },
+    "execution_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Execution Id",
+      "type": "string"
+    },
+    "classification": {
+      "$ref": "#/$defs/ReviewClassification"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "root_causes": {
+      "items": {
+        "$ref": "#/$defs/RootCause"
+      },
+      "title": "Root Causes",
+      "type": "array"
+    },
+    "gate_assessment": {
+      "$ref": "#/$defs/GateAssessment"
+    },
+    "repair_contract": {
+      "$ref": "#/$defs/RepairContract"
+    },
+    "recommended_action": {
+      "$ref": "#/$defs/RecommendedAction"
+    },
+    "recommended_tests": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Recommended Tests",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "model": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "prompt_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "prompt_hash": {
+      "title": "Prompt Hash",
+      "type": "string"
+    },
+    "input_evidence_hash": {
+      "title": "Input Evidence Hash",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_id",
+    "execution_id",
+    "classification",
+    "confidence",
+    "recommended_action",
+    "model",
+    "prompt_version",
+    "prompt_hash",
+    "input_evidence_hash",
+    "created_at"
+  ],
+  "title": "ReviewReport",
+  "type": "object"
+}

@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "Hypothesis": {
+      "additionalProperties": false,
+      "description": "可证伪假设；DSA 只校验结构，不解释其业务语义。",
+      "properties": {
+        "mechanism": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Mechanism",
+          "type": "string"
+        },
+        "prediction": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Prediction",
+          "type": "string"
+        },
+        "failure_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Failure Conditions",
+          "type": "array"
+        },
+        "factor_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Factor Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mechanism",
+        "prediction"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    },
+    "ResearchWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start_date": {
+          "format": "date",
+          "title": "Start Date",
+          "type": "string"
+        },
+        "end_date": {
+          "format": "date",
+          "title": "End Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_date",
+        "end_date"
+      ],
+      "title": "ResearchWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "注册研究实验的请求体 / 实验记录（§6.2）。",
+  "properties": {
+    "experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "round_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Round Id",
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "hypothesis": {
+      "$ref": "#/$defs/Hypothesis"
+    },
+    "research_window": {
+      "$ref": "#/$defs/ResearchWindow"
+    },
+    "data_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data Snapshot Id"
+    },
+    "universe_snapshot_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Universe Snapshot Id"
+    },
+    "gate_policy_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Gate Policy Version",
+      "type": "string"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Tags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "experiment_id",
+    "round_id",
+    "objective",
+    "hypothesis",
+    "research_window",
+    "gate_policy_version"
+  ],
+  "title": "ResearchExperiment",
+  "type": "object"
+}

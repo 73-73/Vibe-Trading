@@ -1,0 +1,22 @@
+{
+  "candidate_id": "candidate_factor_combo_001",
+  "candidate_version": 2,
+  "parent_version": 1,
+  "repair_of_error_id": "err_non_finite_001",
+  "contract_version": "strategy-signal.v1",
+  "source_code": "def generate_scores(factors, params):\n    return factors['momentum_20'] * params.get('momentum_weight', 0.6)",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "manifest": {
+    "factor_ids": ["qlib158_mom_20", "gtja191_alpha099"],
+    "parameters": {
+      "momentum_weight": {"type": "number", "minimum": 0, "maximum": 1}
+    },
+    "default_parameters": {"momentum_weight": 0.6},
+    "direction": "higher_is_better",
+    "rebalance_frequency": "weekly",
+    "top_n": 20,
+    "max_holdings": 20,
+    "exit_policy": "leave_top_n",
+    "seed": 191
+  }
+}

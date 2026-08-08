@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "ExperimentStatus": {
+      "enum": [
+        "created",
+        "active",
+        "waiting",
+        "completed",
+        "rejected",
+        "blocked",
+        "cancelled"
+      ],
+      "title": "ExperimentStatus",
+      "type": "string"
+    },
+    "QueueSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "pending": {
+          "minimum": 0,
+          "title": "Pending",
+          "type": "integer"
+        },
+        "running": {
+          "minimum": 0,
+          "title": "Running",
+          "type": "integer"
+        },
+        "blocked": {
+          "minimum": 0,
+          "title": "Blocked",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pending",
+        "running",
+        "blocked"
+      ],
+      "title": "QueueSummary",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "experiment_state_snapshot.v1：压缩事件前的可恢复状态快照。\n\n游标落入已压缩区间时返回该快照 + 其后首个可读 sequence（§11.9）。",
+  "properties": {
+    "schema_version": {
+      "default": "experiment_state_snapshot.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "through_sequence": {
+      "minimum": 0,
+      "title": "Through Sequence",
+      "type": "integer"
+    },
+    "status": {
+      "$ref": "#/$defs/ExperimentStatus"
+    },
+    "current_execution_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Current Execution Ids",
+      "type": "array"
+    },
+    "latest_candidate_versions": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Latest Candidate Versions",
+      "type": "object"
+    },
+    "latest_decision_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latest Decision Id"
+    },
+    "latest_evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Latest Evidence Ids",
+      "type": "array"
+    },
+    "latest_review_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Latest Review Ids",
+      "type": "array"
+    },
+    "queue_summary": {
+      "$ref": "#/$defs/QueueSummary"
+    },
+    "state_sha256": {
+      "title": "State Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "experiment_id",
+    "through_sequence",
+    "status",
+    "queue_summary",
+    "state_sha256",
+    "created_at"
+  ],
+  "title": "ExperimentStateSnapshot",
+  "type": "object"
+}

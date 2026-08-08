@@ -1,0 +1,11 @@
+{
+  "protocol_version": "research-loop.v1",
+  "status": "ok",
+  "action": "start_execution",
+  "request_id": "req_001",
+  "data": {
+    "execution_id": "exec_001",
+    "status": "queued",
+    "event_cursor": 12
+  }
+}

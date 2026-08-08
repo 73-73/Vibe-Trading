@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "FactorSnapshotManifestInput": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "default": "factor_snapshot.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "data_snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Data Snapshot Id",
+          "type": "string"
+        },
+        "universe_snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Universe Snapshot Id",
+          "type": "string"
+        },
+        "factor_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Factor Ids",
+          "type": "array"
+        },
+        "formula_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Formula Versions",
+          "type": "object"
+        },
+        "source_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Source Versions",
+          "type": "object"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "data_snapshot_id",
+        "universe_snapshot_id",
+        "factor_ids",
+        "row_count",
+        "artifact_id",
+        "sha256"
+      ],
+      "title": "FactorSnapshotManifestInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "注册因子快照的请求体（§6.15）；DSA 侧完成全部一致性校验。",
+  "properties": {
+    "manifest": {
+      "$ref": "#/$defs/FactorSnapshotManifestInput"
+    }
+  },
+  "required": [
+    "manifest"
+  ],
+  "title": "FactorSnapshotRegisterRequest",
+  "type": "object"
+}

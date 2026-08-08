@@ -1,0 +1,164 @@
+{
+  "$defs": {
+    "GateFailureAction": {
+      "description": "gate 检查失败时的动作 allowlist（§14.1）。",
+      "enum": [
+        "reject",
+        "warn"
+      ],
+      "title": "GateFailureAction",
+      "type": "string"
+    },
+    "GateOperator": {
+      "description": "gate 检查的比较运算符 allowlist（§14.1）。",
+      "enum": [
+        ">=",
+        "<=",
+        "==",
+        ">",
+        "<"
+      ],
+      "title": "GateOperator",
+      "type": "string"
+    },
+    "GatePolicyCheck": {
+      "additionalProperties": false,
+      "description": "单条 gate 检查；metric/operator/scope/failure_action 全部走 allowlist。",
+      "properties": {
+        "check_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Check Id",
+          "type": "string"
+        },
+        "metric": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "operator": {
+          "$ref": "#/$defs/GateOperator"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "scope": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Scope",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "failure_action": {
+          "$ref": "#/$defs/GateFailureAction",
+          "default": "reject"
+        }
+      },
+      "required": [
+        "check_id",
+        "metric",
+        "operator",
+        "scope"
+      ],
+      "title": "GatePolicyCheck",
+      "type": "object"
+    },
+    "GateStatus": {
+      "enum": [
+        "draft",
+        "challenger",
+        "champion",
+        "retired",
+        "rejected"
+      ],
+      "title": "GateStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "gate_policy.v1：当前判分规则。\n\n阈值为 null 或指标不可计算时，required check 结果为 not_evaluable 并阻止\n晋级，不得按通过处理（§14.1）。",
+  "properties": {
+    "schema_version": {
+      "default": "gate_policy.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "policy_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Policy Id",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/GateStatus",
+      "default": "champion"
+    },
+    "immutable_invariants": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Immutable Invariants",
+      "type": "array"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/GatePolicyCheck"
+      },
+      "minItems": 1,
+      "title": "Checks",
+      "type": "array"
+    },
+    "metric_registry_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Metric Registry Version",
+      "type": "string"
+    },
+    "created_by": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Created By",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "sha256": {
+      "title": "Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy_id",
+    "version",
+    "metric_registry_version",
+    "created_by",
+    "created_at",
+    "sha256"
+  ],
+  "title": "GatePolicy",
+  "type": "object"
+}
