@@ -160,7 +160,6 @@ async def _run_startup_preflight() -> None:
     from src.preflight import run_preflight
 
     from src.config import migrate as _migrate
-
     try:
         _migrate.migrate_legacy_state()  # one-time pre-#904 state move; must never block startup
     except Exception:  # pragma: no cover — best-effort
@@ -313,11 +312,7 @@ from src.api.scheduled_routes import (  # noqa: E402, F401
     _scheduled_research_scheduler_enabled,
 )
 
-
-# Research Campaign Routes (M4) - §7.2 DSA research-loop campaign controller
-from src.research_controller.campaign_api.assemble import register_research_campaign  # noqa: E402
-register_research_campaign(app)
-
+from src.research_controller.campaign_api.assemble import register_research_campaign as _register_campaign; _register_campaign(app)  # noqa: E402 — Research Campaign Routes (M4) §7.2
 
 # ============================================================================
 # Main Entry Point
